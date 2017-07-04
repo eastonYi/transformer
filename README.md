@@ -18,7 +18,7 @@ I don't intend to replicate the paper exactly. Rather, I aim to implement the ma
 
 ## File description
   * `hyperparams.py` includes all hyper parameters that are needed.
-  * `prepro.py` creates vocabulary files for the source and the target.
+  * `vocab.py` creates vocabulary files for the source and the target.
   * `data_load.py` contains functions regarding loading and batching data.
   * `modules.py` has all building blocks for encoder/decoder networks.
   * `train.py` has the model.
@@ -30,7 +30,7 @@ I don't intend to replicate the paper exactly. Rather, I aim to implement the ma
 wget -qO- --show-progress https://wit3.fbk.eu/archive/2016-01//texts/de/en/de-en.tgz | tar xz; mv de-en corpora
 ```
 * STEP 2. Adjust hyper parameters in `hyperparams.py` if necessary.
-* STEP 3. Run `prepro.py` to generate vocabulary files to the `preprocessed` folder.
+* STEP 3. Run `vocab.py` to generate vocabulary files to the `preprocessed` folder.
 * STEP 4. Run `train.py` or download the [pretrained files](https://u42868014.dl.dropboxusercontent.com/u/42868014/transformer/logdir.zip).
 
 ## Training Loss and Accuracy
