@@ -40,6 +40,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
-    make_vocab(config.train.src_path, config.train.scr_vocab)
-    make_vocab(config.train.dst_path, config.train.dst_vocab)
+    make_vocab(config.train.src_path, config.scr_vocab)
+    make_vocab(config.train.dst_path, config.dst_vocab)
     print("Done")
