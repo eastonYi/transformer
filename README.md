@@ -22,7 +22,7 @@ I don't intend to replicate the paper exactly. Rather, I aim to implement the ma
   * `data_load.py` contains functions regarding loading and batching data.
   * `modules.py` has all building blocks for encoder/decoder networks.
   * `train.py` has the model.
-  * `eval.py` is for evaluation.
+  * `evaluate.py` is for evaluation.
 
 ## Training
 * STEP 1. Download [IWSLT 2016 German–English parallel corpus](https://wit3.fbk.eu/download.php?release=2016-01&type=texts&slang=de&tlang=en) and extract it to `corpora/` folder.
@@ -41,7 +41,7 @@ wget -qO- --show-progress https://wit3.fbk.eu/archive/2016-01//texts/de/en/de-en
 <img src="fig/accuracy.png">
 
 ## Evaluation
-  * Run `eval.py`.
+  * Run `evaluate.py`.
 
 ## Results
 I got a BLEU score of 17.14. (Recollect I trained with a small dataset, limited vocabulary) Some of the evaluation results are as follows. Details are available in the `results` folder.
