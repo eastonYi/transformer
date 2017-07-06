@@ -32,10 +32,7 @@ class DataUtil(object):
     def load_vocab(self):
 
         def load_vocab_(path, vocab_size):
-            # vocab = [line.split()[0] for line in
-            #          codecs.open(path, 'r', 'utf-8').read().splitlines() if int(line.split()[1])]
-            vocab = [line.split()[0] for line in
-                     codecs.open(path, 'r', 'utf-8').read().splitlines()]
+            vocab = [line.split()[0] for line in codecs.open(path, 'r', 'utf-8')]
             vocab = vocab[:vocab_size]
             assert len(vocab) == vocab_size
             word2idx = {word: idx for idx, word in enumerate(vocab)}
@@ -76,6 +73,7 @@ class DataUtil(object):
             if len(src_sents) >= batch_size:
                 yield self.create_batch(src_sents), self.create_batch(dst_sents)
                 src_sents, dst_sents = [], []
+
         if src_sents and dst_sents:
             yield self.create_batch(src_sents), self.create_batch(dst_sents)
 
@@ -127,10 +125,11 @@ class DataUtil(object):
             if max(caches[bucket][2], caches[bucket][3]) >= self.config.train.tokens_per_batch:
                 yield self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1])
                 caches[bucket] = [[], [], 0, 0]
-
+                # TODO
+                return
         # Clean remain sentences
         for bucket in buckets:
-            if caches[bucket][0]:  # If there are sentences in the bucket.
+            if len(caches[bucket][0]) > 10:  # If there are more than 20 sentences in the bucket.
                 yield self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1])
 
         # Remove shuffled files when epoch finished.
@@ -195,7 +194,7 @@ class DataUtil(object):
         maxlen = max([len(s) for s in indices])
         X = np.zeros([len(indices), maxlen], np.int32)
         for i, x in enumerate(indices):
-            X[i][:len(x)] = x
+            X[i, :len(x)] = x
 
         return X
 

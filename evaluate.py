@@ -67,7 +67,24 @@ class Evaluator(object):
         Returns:
             A 2-d array with size [n, dst_length], destination sentence indices.
         """
-        pass
+        beam_size, batch_size = config.test.beam_size, X.shape[0]
+        encoder_output = self.sess.run(self.model.encoder_output, feed_dict={self.model.src_pl: X})
+        preds = np.ones([batch_size, 1], dtype=INT_TYPE) * 2  # <S>
+        last_k_preds, last_k_scores = self.sess.run([self.model.k_preds, self.model.k_scores],
+                                                    feed_dict={self.model.encoder_output: encoder_output,
+                                                               self.model.decoder_input: preds})  # [batch_size, beam_size]
+
+        preds = np.concatenate((np.ones([batch_size * beam_size, 1], dtype=INT_TYPE) * 2, last_k_preds.flatten()), 1)   # [batch_size * beam_size, 2]
+        scores = last_k_scores.flatten()   # [batch_size * beam_size]
+        encoder_output = np.array(zip(*[encoder_output]*beam_size)).reshape([batch_size * beam_size, -1])  # [batch_size * beam_size, hidden_units]
+
+        last_k_preds, last_k_scores = self.sess.run([self.model.k_preds, self.model.k_scores],
+                                                    feed_dict={self.model.encoder_output: encoder_output,
+                                                               self.model.decoder_input: preds})  # [batch_size * beam_size, beam_size]
+        last_k_preds = last_k_preds.reshape([batch_size, -1])  # [batch_size, beam_size * beam_size]
+        last_k_scores += scores[:, None]    # Add parents scores
+        last_k_scores = last_k_scores.reshape([batch_size, -1])     # [batch_size, beam_size * beam_size]
+        last_k_preds.t
 
     def evaluate(self):
         # Load data
@@ -84,7 +101,7 @@ class Evaluator(object):
                 print(sent, file=fd)
         fd.close()
 
-        # In case of BPE.
+        # Remove BPE flag, if have.
         os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, self.config.test.output_path))
 
         # Call a script to evaluate.
