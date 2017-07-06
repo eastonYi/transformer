@@ -84,7 +84,7 @@ class Evaluator(object):
         last_k_preds = last_k_preds.reshape([batch_size, -1])  # [batch_size, beam_size * beam_size]
         last_k_scores += scores[:, None]    # Add parents scores
         last_k_scores = last_k_scores.reshape([batch_size, -1])     # [batch_size, beam_size * beam_size]
-        last_k_preds.t
+        # TODO
 
     def evaluate(self):
         # Load data

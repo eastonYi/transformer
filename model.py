@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-# from modules import embedding, multihead_attention, feed_forward, label_smoothing, residual, layer_normalize
+
 from tensor2tensor.common_attention import multihead_attention, add_timing_signal_1d, attention_bias_ignore_padding, attention_bias_lower_triangle
 from tensor2tensor.common_layers import layer_norm, embedding, conv_hidden_relu, smoothing_cross_entropy
 
@@ -61,7 +61,6 @@ class Model(object):
                         encoder_output = self.encoder(X, reuse=i>0 or None)
                         decoder_output = self.decoder(dec_input, encoder_output, reuse=i > 0 or None)
                         acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
-                        tf.summary.scalar('loss of device %d'%i, loss)
                         acc_list.append(acc)
                         loss_list.append(loss)
                         gv_list.append(self.optimizer.compute_gradients(loss))
@@ -127,7 +126,7 @@ class Model(object):
 
     def encoder(self, encoder_input, reuse):
         """Transformer encoder."""
-        with tf.variable_scope("encoder", reuse=reuse):
+        with tf.variable_scope("encoder", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
             # Mask
             encoder_padding = tf.equal(encoder_input, 0)
             # Embedding
@@ -135,13 +134,14 @@ class Model(object):
                                        vocab_size=self.config.src_vocab_size,
                                        dense_size=self.config.hidden_units,
                                        multiplier=self.config.hidden_units**0.5,
-                                       name='src_embeding')
+                                       name="src_embedding")
             # Add positional signal
             encoder_output = add_timing_signal_1d(encoder_output)
             # Dropout
             encoder_output = tf.layers.dropout(encoder_output,
                                                rate=self.config.residual_dropout_rate,
                                                training=self.is_training)
+
             # Blocks
             for i in range(self.config.num_blocks):
                 with tf.variable_scope("block_{}".format(i)):
@@ -155,12 +155,11 @@ class Model(object):
                                                   total_value_depth=self.config.hidden_units,
                                                   output_depth=self.config.hidden_units,
                                                   num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0,
+                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   name='encoder_self_attention',
                                                   summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate if self.is_training else 0)
-                    if reuse is None:
-                        tf.summary.histogram(name='encoder', values=encoder_output)
+                                              dropout_rate=self.config.residual_dropout_rate,
+                                              is_training=self.is_training)
 
                     # Feed Forward
                     encoder_output = residual(encoder_output,
@@ -168,14 +167,15 @@ class Model(object):
                                                   inputs=encoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
                                                   output_size=self.config.hidden_units),
-                                              dropout_rate=self.config.residual_dropout_rate if self.is_training else 0)
+                                              dropout_rate=self.config.residual_dropout_rate,
+                                              is_training=self.is_training)
         # Mask padding part to zeros.
         encoder_output *= tf.expand_dims(1.0 - tf.to_float(encoder_padding), axis=-1)
         return encoder_output
 
     def decoder(self, decoder_input, encoder_output, reuse):
         """Transformer decoder"""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope("decoder", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
             encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
             encoder_attention_bias = attention_bias_ignore_padding(encoder_padding)
 
@@ -209,15 +209,15 @@ class Model(object):
                                                   output_depth=self.config.hidden_units,
                                                   name="decoder_self_attention",
                                                   summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate if self.is_training else 0)
+                                              dropout_rate=self.config.residual_dropout_rate,
+                                              is_training=self.is_training)
 
                     # Multihead Attention (vanilla attention)
                     decoder_output = residual(decoder_output,
                                               multihead_attention(
                                                   query_antecedent=decoder_output,
                                                   memory_antecedent=encoder_output,
-                                                  # bias=encoder_attention_bias,
-                                                  bias=None,
+                                                  bias=encoder_attention_bias,
                                                   total_key_depth=self.config.hidden_units,
                                                   total_value_depth=self.config.hidden_units,
                                                   output_depth=self.config.hidden_units,
@@ -225,7 +225,8 @@ class Model(object):
                                                   dropout_rate=self.config.attention_dropout_rate if self.is_training else 0,
                                                   name="decoder_vanilla_attention",
                                                   summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate if self.is_training else 0)
+                                              dropout_rate=self.config.residual_dropout_rate,
+                                              is_training=self.is_training)
 
                     # Feed Forward
                     decoder_output = residual(decoder_output,
@@ -233,7 +234,8 @@ class Model(object):
                                                   decoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
                                                   output_size=self.config.hidden_units),
-                                              dropout_rate=self.config.residual_dropout_rate if self.is_training else 0)
+                                              dropout_rate=self.config.residual_dropout_rate,
+                                              is_training=self.is_training)
 
             return decoder_output
 
@@ -249,7 +251,7 @@ class Model(object):
 
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
-        with tf.variable_scope("output", reuse=reuse):
+        with tf.variable_scope("output", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
             logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
             preds = tf.to_int32(tf.arg_max(logits, dimension=-1))
             mask = tf.to_float(tf.not_equal(Y, 0))
@@ -299,7 +301,7 @@ def average_gradients(tower_grads):
     return average_grads
 
 
-def residual(inputs, outputs, dropout_rate):
+def residual(inputs, outputs, dropout_rate, is_training):
     """Residual connection.
 
     Args:
@@ -311,7 +313,7 @@ def residual(inputs, outputs, dropout_rate):
     Returns:
         A Tensor.
     """
-    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=True)
+    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=is_training)
     output = layer_norm(output)
     return output
 
@@ -328,12 +330,11 @@ def split_tensor(input, n):
     batch_size = tf.shape(input)[0]
     ls = tf.cast(tf.lin_space(0.0, tf.cast(batch_size, FLOAT_TYPE), n + 1), INT_TYPE)
     return [input[ls[i]:ls[i+1]] for i in range(n)]
-    # return tf.split(input, n)
 
 
 def learning_rate_decay(config, global_step):
     """Inverse-decay learning rate until warmup_steps, then decay."""
     warmup_steps = tf.to_float(config.train.learning_rate_warmup_steps)
     global_step = tf.to_float(global_step)
-    return 10.0 * config.hidden_units ** -0.5 * tf.minimum(
+    return config.hidden_units ** -0.5 * tf.minimum(
         (global_step + 1.0) * warmup_steps ** -1.5, (global_step + 1.0) ** -0.5)

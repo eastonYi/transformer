@@ -4,8 +4,8 @@ dst_vocab: '/data2/cqwang/ende/vocab.bpe.32000'
 src_vocab_size: 32000
 dst_vocab_size: 32000
 hidden_units: 512
-attention_dropout_rate: 0.1
-residual_dropout_rate: 0.0
+attention_dropout_rate: 0.0
+residual_dropout_rate: 0.1
 num_blocks: 6
 num_heads: 8
 binding_embedding: False
@@ -16,12 +16,12 @@ train:
     batch_size: 256
     tokens_per_batch: 3500
     max_length: 256
-    num_epochs: 50000
+    num_epochs: 500
     logdir: 'model1'
     save_freq: 1000
     grads_clip: 5
     optimizer: 'normal_adam'
-    learning_rate: 0.01
+    learning_rate: 0.0001
     learning_rate_warmup_steps: 4000
     label_smoothing: 0.1
 test:
@@ -31,4 +31,3 @@ test:
     batch_size: 16
     beam_size: 1
     devices: '0'
-    max_length: 100

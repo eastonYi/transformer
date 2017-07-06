@@ -125,8 +125,7 @@ class DataUtil(object):
             if max(caches[bucket][2], caches[bucket][3]) >= self.config.train.tokens_per_batch:
                 yield self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1])
                 caches[bucket] = [[], [], 0, 0]
-                # TODO
-                return
+
         # Clean remain sentences
         for bucket in buckets:
             if len(caches[bucket][0]) > 10:  # If there are more than 20 sentences in the bucket.

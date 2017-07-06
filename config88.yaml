@@ -9,7 +9,6 @@ residual_dropout_rate: 0.1
 num_blocks: 6
 num_heads: 8
 binding_embedding: False
-apply_bpe: True
 train:
     devices: '0,1,2,3'
     src_path: '/data/cqwang/ende/train.tok.clean.bpe.32000.en'
@@ -21,8 +20,8 @@ train:
     logdir: 'model1'
     save_freq: 1000
     grads_clip: 5
-    optimizer: 'normal_adam'
-    learning_rate: 0.01
+    optimizer: 'adam'
+    learning_rate: 1
     learning_rate_warmup_steps: 4000
     label_smoothing: 0.1
 test:
@@ -32,4 +31,3 @@ test:
     batch_size: 16
     beam_size: 1
     devices: '0'
-    max_length: 100

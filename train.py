@@ -34,7 +34,7 @@ def train(config):
             except:
                 print('Failed to reload model.')
             for epoch in range(1, config.train.num_epochs+1):
-                for batch in du.get_training_batches_with_buckets(shuffle=False):
+                for batch in du.get_training_batches_with_buckets():
                     start_time = time.time()
                     step, lr, gnorm, loss, acc, summary, _ = sess.run([model.global_step, model.learning_rate, model.grads_norm,
                                                                        model.loss, model.acc, model.summary_op, model.train_op],
