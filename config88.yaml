@@ -14,20 +14,22 @@ train:
     src_path: '/data/cqwang/ende/train.tok.clean.bpe.32000.en'
     dst_path: '/data/cqwang/ende/train.tok.clean.bpe.32000.de'
     batch_size: 256
-    tokens_per_batch: 6000
-    max_length: 256
-    num_epochs: 50000
-    logdir: 'model1'
+    tokens_per_batch: 12000
+    max_length: 100
+    num_epochs: 500
+    logdir: 'model2'
     save_freq: 1000
+    summary_freq: 100
     grads_clip: 5
-    optimizer: 'adam'
-    learning_rate: 1
+    optimizer: 'normal_adam'
+    learning_rate: 0.0001
     learning_rate_warmup_steps: 4000
     label_smoothing: 0.1
 test:
     src_path: '/data/cqwang/ende/newstest2014.tok.bpe.32000.en'
     dst_path: '/data/cqwang/ende/newstest2014.tok.de'
     output_path: '/data/cqwang/ende/newstest2014.de.output'
-    batch_size: 16
+    batch_size: 60
+    max_target_length: 100
     beam_size: 1
-    devices: '0'
+    devices: '5,6,7'

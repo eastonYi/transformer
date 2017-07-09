@@ -1,5 +1,7 @@
 import tensorflow as tf
+from tensorflow.python.ops import init_ops
 import numpy as np
+import logging
 
 from tensor2tensor.common_attention import multihead_attention, add_timing_signal_1d, attention_bias_ignore_padding, attention_bias_lower_triangle
 from tensor2tensor.common_layers import layer_norm, embedding, conv_hidden_relu, smoothing_cross_entropy
@@ -12,6 +14,7 @@ class Model(object):
     def __init__(self, config):
         self.graph = tf.Graph()
         self.config = config
+        self._logger = logging.getLogger('model')
         self._prepared = False
 
     def prepare(self, is_training):
@@ -39,6 +42,7 @@ class Model(object):
                         self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
                     elif self.config.train.optimizer == 'mom':
                         self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
+        self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
         self._prepared = True
 
     def build_train_model(self):
@@ -58,6 +62,7 @@ class Model(object):
                 acc_list, loss_list, gv_list = [], [], []
                 for i, (X, Y, dec_input, device) in enumerate(zip(Xs, Ys, dec_inputs, self.devices)):
                     with tf.device(lambda op: self.choose_device(op, device)):
+                        self._logger.info('Build model on %s.' % device)
                         encoder_output = self.encoder(X, reuse=i>0 or None)
                         decoder_output = self.decoder(dec_input, encoder_output, reuse=i > 0 or None)
                         acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
@@ -109,14 +114,15 @@ class Model(object):
                 preds_list, k_preds_list, k_scores_list = [], [], []
                 for i, (X, enc_output, dec_input, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, self.devices)):
                     with tf.device(lambda op: self.choose_device(op, device)):
+                        self._logger.info('Build model on %s.' % device)
                         decoder_output = self.decoder(dec_input, enc_output, reuse=i > 0 or None)
                         preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
                         preds_list.append(preds)
                         k_preds_list.append(k_preds)
                         k_scores_list.append(k_scores)
                 self.preds = tf.concat(preds_list, axis=0)
-                self.k_preds = tf.concat(preds_list, axis=1)
-                self.k_scores = tf.concat(k_scores_list, axis=1)
+                self.k_preds = tf.concat(k_preds_list, axis=0)
+                self.k_scores = tf.concat(k_scores_list, axis=0)
 
     def choose_device(self, op, device):
         """Choose a device according the op's type."""
@@ -126,7 +132,7 @@ class Model(object):
 
     def encoder(self, encoder_input, reuse):
         """Transformer encoder."""
-        with tf.variable_scope("encoder", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
+        with tf.variable_scope("encoder", initializer=self._initializer, reuse=reuse):
             # Mask
             encoder_padding = tf.equal(encoder_input, 0)
             # Embedding
@@ -175,7 +181,7 @@ class Model(object):
 
     def decoder(self, decoder_input, encoder_output, reuse):
         """Transformer decoder"""
-        with tf.variable_scope("decoder", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
+        with tf.variable_scope("decoder", initializer=self._initializer, reuse=reuse):
             encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
             encoder_attention_bias = attention_bias_ignore_padding(encoder_padding)
 
@@ -251,7 +257,7 @@ class Model(object):
 
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
-        with tf.variable_scope("output", initializer=tf.uniform_unit_scaling_initializer, reuse=reuse):
+        with tf.variable_scope("output", initializer=self._initializer, reuse=reuse):
             logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
             preds = tf.to_int32(tf.arg_max(logits, dimension=-1))
             mask = tf.to_float(tf.not_equal(Y, 0))

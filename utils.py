@@ -2,9 +2,9 @@ from __future__ import print_function
 import numpy as np
 import os
 import codecs
+import logging
 from tempfile import mkstemp
 from itertools import izip
-import tensorflow as tf
 
 
 class AttrDict(dict):
@@ -27,6 +27,7 @@ class DataUtil(object):
     """
     def __init__(self, config):
         self.config = config
+        self._logger = logging.getLogger('util')
         self.load_vocab()
 
     def load_vocab(self):
@@ -39,6 +40,7 @@ class DataUtil(object):
             idx2word = {idx: word for idx, word in enumerate(vocab)}
             return word2idx, idx2word
 
+        self._logger.debug('Load vocabularies %s and %s.' % (self.config.src_vocab, self.config.dst_vocab))
         self.src2idx, self.idx2src = load_vocab_(self.config.src_vocab, self.config.src_vocab_size)
         self.dst2idx, self.idx2dst = load_vocab_(self.config.dst_vocab, self.config.dst_vocab_size)
 
@@ -99,6 +101,7 @@ class DataUtil(object):
         src_path = self.config.train.src_path
         dst_path = self.config.train.dst_path
         if shuffle:
+            self._logger.debug('Shuffle files %s and %s.' % (src_path, dst_path))
             src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
         else:
             src_shuf_path = src_path
@@ -123,13 +126,19 @@ class DataUtil(object):
             caches[bucket][3] += len(dst_sent)
 
             if max(caches[bucket][2], caches[bucket][3]) >= self.config.train.tokens_per_batch:
-                yield self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1])
+                batch = (self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1]))
+                self._logger.debug(
+                    'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
+                yield batch
                 caches[bucket] = [[], [], 0, 0]
 
         # Clean remain sentences
         for bucket in buckets:
             if len(caches[bucket][0]) > 10:  # If there are more than 20 sentences in the bucket.
-                yield self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1])
+                batch = (self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1]))
+            self._logger.debug(
+                'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
+            yield batch
 
         # Remove shuffled files when epoch finished.
         if shuffle:
