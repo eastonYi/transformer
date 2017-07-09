@@ -85,8 +85,7 @@ class Evaluator(object):
             """
             b = np.array([0.0] + [-inf] * (beam_size - 1))
             b = np.repeat(b[None,:], batch_size * beam_size, axis=0)  # [batch * beam_size, beam_size]
-            b *= bias[:, None]
-            return scores + b
+            return scores * (1 - bias[:, None]) + b * bias[:, None]
 
         def get_bias_preds(preds, bias):
             """
@@ -118,19 +117,16 @@ class Evaluator(object):
                 self.sess.run([self.model.k_preds, self.model.k_scores],
                               feed_dict={self.model.encoder_output: encoder_output,
                                          self.model.decoder_input: preds})  # [batch_size * beam_size, beam_size]
+
+            last_k_preds = get_bias_preds(last_k_preds, bias)
+            last_k_scores = get_bias_scores(last_k_scores, bias)
             # Shrink the search range.
             scores = scores[:, None] + last_k_scores  # [batch_size * beam_size, beam_size]
-            # import pdb; pdb.set_trace()
-            # Bias finished sequences.
-            scores = get_bias_scores(scores, bias)
-            last_k_preds = get_bias_preds(last_k_preds, bias)
-
             scores = scores.reshape([batch_size, beam_size**2])  # [batch_size, beam_size * beam_size]
 
             # Reserve beam_size nodes.
-            # k_indices = np.argsort(scores)[:, -beam_size:]  # [batch_size, beam_size]
-            k_indices = np.argpartition(scores, kth=-beam_size, axis=-1)[:, -beam_size:]
-            k_indices = np.repeat(np.array(range(0, batch_size)), beam_size) * beam_size**2 + k_indices.flatten()    # [batch_size * beam_size]
+            k_indices = np.argsort(scores)[:, -beam_size:]  # [batch_size, beam_size]
+            k_indices = np.repeat(np.array(range(0, batch_size)), beam_size) * beam_size**2 + k_indices.flatten()  # [batch_size * beam_size]
             scores = scores.flatten()[k_indices]  # [batch_size * beam_size]
             last_k_preds = last_k_preds.flatten()[k_indices]
             preds = preds[k_indices // beam_size]
@@ -143,6 +139,7 @@ class Evaluator(object):
         max_indices = np.argmax(scores, axis=-1)   # [batch_size]
         max_indices += np.array(range(batch_size)) * beam_size
         preds = preds.reshape([batch_size * beam_size, -1])
+        logging.debug(scores.flatten()[max_indices])
         return preds[max_indices][:, 1:]
 
     def evaluate(self):
@@ -179,7 +176,7 @@ if __name__ == '__main__':
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
     # Logger
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     evaluator = Evaluator(config)
     evaluator.evaluate()
     logging.info("Done")
