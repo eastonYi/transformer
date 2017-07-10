@@ -23,7 +23,7 @@ def train(config):
     with model.graph.as_default():
         saver = tf.train.Saver(var_list=tf.global_variables())
         summary_writer = tf.summary.FileWriter(config.train.logdir, graph=model.graph)
-        saver_partial = tf.train.Saver(var_list=[v for v in tf.trainable_variables() if 'Adam' not in v.name])
+        # saver_partial = tf.train.Saver(var_list=[v for v in tf.trainable_variables() if 'Adam' not in v.name])
 
         with tf.Session(config=sess_config) as sess:
             # Initialize all variables.

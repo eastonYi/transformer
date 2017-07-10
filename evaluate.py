@@ -142,33 +142,46 @@ class Evaluator(object):
         logging.debug(scores.flatten()[max_indices])
         return preds[max_indices][:, 1:]
 
+    def loss(self, X, Y):
+        return self.sess.run(self.model.loss_sum, feed_dict={self.model.src_pl: X, self.model.dst_pl: Y})
+
     def evaluate(self):
         # Load data
         du = DataUtil(self.config)
         _, tmp = mkstemp()
         fd = codecs.open(tmp, 'w', 'utf8')
         count = 0
+        token_count = 0
+        loss_sum = 0
         start = time.time()
-        for batch in du.get_test_batches():
+        for batch in du.get_test_batches_with_target():
             # if config.test.beam_size == 1:
-            #     Y = self.greedy_search(batch)
+            #     Y = self.greedy_search(X)
             # else:
-            #     Y = self.beam_search(batch)
-            Y = self.beam_search(batch)
-            sents = du.indices_to_words(Y)
+            #     Y = self.beam_search(X)
+            X, Y = batch
+            Yp = self.beam_search(X)
+
+            loss_sum += self.loss(X, Y)
+            token_count += np.sum(np.greater(Y, 0))
+
+            sents = du.indices_to_words(Yp)
             for sent in sents:
                 print(sent, file=fd)
-            count += len(batch)
+            count += len(batch[0])
             logging.info('%d sentences processed in %.2f minutes.' % (count, (time.time()-start) / 60))
         fd.close()
 
         # Remove BPE flag, if have.
         os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, self.config.test.output_path))
 
-        # Call a script to evaluate.
-        os.system("perl multi-bleu.perl %s < %s" % (self.config.test.dst_path, self.config.test.output_path))
+        # Compute PPL
+        logging.info('PPL: %.4f' % np.exp(loss_sum / token_count))
 
-                                          
+        # Call a script to evaluate.
+        os.system("perl multi-bleu.perl %s < %s" % (self.config.test.ori_dst_path, self.config.test.output_path))
+
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--config', dest='config')

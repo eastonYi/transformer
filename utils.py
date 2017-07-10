@@ -73,11 +73,11 @@ class DataUtil(object):
             dst_sents.append(dst_sent)
             # Create a padded batch.
             if len(src_sents) >= batch_size:
-                yield self.create_batch(src_sents), self.create_batch(dst_sents)
+                yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
                 src_sents, dst_sents = [], []
 
         if src_sents and dst_sents:
-            yield self.create_batch(src_sents), self.create_batch(dst_sents)
+            yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
 
         # Remove shuffled files when epoch finished.
         if shuffle:
@@ -126,7 +126,7 @@ class DataUtil(object):
             caches[bucket][3] += len(dst_sent)
 
             if max(caches[bucket][2], caches[bucket][3]) >= self.config.train.tokens_per_batch:
-                batch = (self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1]))
+                batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
                 self._logger.debug(
                     'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
                 yield batch
@@ -135,7 +135,7 @@ class DataUtil(object):
         # Clean remain sentences
         for bucket in buckets:
             if len(caches[bucket][0]) > 10:  # If there are more than 20 sentences in the bucket.
-                batch = (self.create_batch(caches[bucket][0]), self.create_batch(caches[bucket][1]))
+                batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
             self._logger.debug(
                 'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
             yield batch
@@ -186,16 +186,45 @@ class DataUtil(object):
             src_sents.append(src_sent)
             # Create a padded batch.
             if len(src_sents) >= batch_size:
-                yield self.create_batch(src_sents)
+                yield self.create_batch(src_sents, o='src')
                 src_sents = []
         if src_sents:
-            yield self.create_batch(src_sents)
+            yield self.create_batch(src_sents, o='src')
 
-    def create_batch(self, sents):
+    def get_test_batches_with_target(self):
+        """
+        Usually we don't need target sentences for test unless we want to compute PPl.
+        Returns:
+            Paired source and target batches.
+        """
+        src_path = self.config.test.src_path
+        dst_path = self.config.test.dst_path
+        batch_size = self.config.test.batch_size
+
+        # Read batches from test files.
+        src_sents, dst_sents = [], []
+        for src_sent, dst_sent in izip(codecs.open(src_path, 'r', 'utf8'),
+                                       codecs.open(dst_path, 'r', 'utf8')):
+            src_sent = src_sent.split()
+            dst_sent = dst_sent.split()
+            src_sents.append(src_sent)
+            dst_sents.append(dst_sent)
+            # Create a padded batch.
+            if len(src_sents) >= batch_size:
+                yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
+                src_sents, dst_sents = [], []
+        if src_sents:
+            yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
+
+    def create_batch(self, sents, o):
         # Convert words to indices.
+        assert o in ('src', 'dst')
         indices = []
         for sent in sents:
-            x = [self.src2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
+            if o == 'src':
+                x = [self.src2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
+            else:
+                x = [self.dst2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
             indices.append(x)
 
         # Pad to the same length.

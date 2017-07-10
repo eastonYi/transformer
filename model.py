@@ -54,17 +54,14 @@ class Model(object):
             with tf.device(self.sync_device):
                 self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
                 self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
-                # Append <S> before sentences as decoder input
-                decoder_input = tf.concat((tf.ones_like(self.dst_pl[:, :1]) * 2, self.dst_pl[:, :-1]), 1)
                 Xs = split_tensor(self.src_pl, len(self.devices))
                 Ys = split_tensor(self.dst_pl, len(self.devices))
-                dec_inputs = split_tensor(decoder_input, len(self.devices))
                 acc_list, loss_list, gv_list = [], [], []
-                for i, (X, Y, dec_input, device) in enumerate(zip(Xs, Ys, dec_inputs, self.devices)):
+                for i, (X, Y, device) in enumerate(zip(Xs, Ys, self.devices)):
                     with tf.device(lambda op: self.choose_device(op, device)):
                         self._logger.info('Build model on %s.' % device)
                         encoder_output = self.encoder(X, reuse=i>0 or None)
-                        decoder_output = self.decoder(dec_input, encoder_output, reuse=i > 0 or None)
+                        decoder_output = self.decoder(shift_right(Y), encoder_output, reuse=i > 0 or None)
                         acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
                         acc_list.append(acc)
                         loss_list.append(loss)
@@ -97,8 +94,10 @@ class Model(object):
         with self.graph.as_default():
             with tf.device(self.sync_device):
                 self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-                self.decoder_input = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='decoder_input')
+                self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
+                self.decoder_input = shift_right(self.dst_pl)
                 Xs = split_tensor(self.src_pl, len(self.devices))
+                Ys = split_tensor(self.dst_pl, len(self.devices))
                 dec_inputs = split_tensor(self.decoder_input, len(self.devices))
 
                 # Encode
@@ -112,14 +111,20 @@ class Model(object):
                 # Decode
                 enc_outputs = split_tensor(self.encoder_output, len(self.devices))
                 preds_list, k_preds_list, k_scores_list = [], [], []
-                for i, (X, enc_output, dec_input, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, self.devices)):
+                self.loss_sum = 0.0
+                for i, (X, enc_output, dec_input, Y, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, Ys, self.devices)):
                     with tf.device(lambda op: self.choose_device(op, device)):
                         self._logger.info('Build model on %s.' % device)
                         decoder_output = self.decoder(dec_input, enc_output, reuse=i > 0 or None)
+                        # Predictions
                         preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
                         preds_list.append(preds)
                         k_preds_list.append(k_preds)
                         k_scores_list.append(k_scores)
+                        # Loss
+                        loss = self.test_loss(decoder_output, Y, reuse=True)
+                        self.loss_sum += loss
+
                 self.preds = tf.concat(preds_list, axis=0)
                 self.k_preds = tf.concat(k_preds_list, axis=0)
                 self.k_scores = tf.concat(k_scores_list, axis=0)
@@ -255,6 +260,15 @@ class Model(object):
             last_k_preds = tf.to_int32(last_k_preds)
         return last_preds, last_k_preds, last_k_scores
 
+    def test_loss(self, decoder_output, Y, reuse):
+        with tf.variable_scope("output", initializer=self._initializer, reuse=reuse):
+            logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
+            mask = tf.to_float(tf.not_equal(Y, 0))
+            labels = tf.one_hot(Y, depth=self.config.dst_vocab_size)
+            loss = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+            loss_sum = tf.reduce_sum(loss * mask)
+        return loss_sum
+
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
         with tf.variable_scope("output", initializer=self._initializer, reuse=reuse):
@@ -344,3 +358,8 @@ def learning_rate_decay(config, global_step):
     global_step = tf.to_float(global_step)
     return config.hidden_units ** -0.5 * tf.minimum(
         (global_step + 1.0) * warmup_steps ** -1.5, (global_step + 1.0) ** -0.5)
+
+
+def shift_right(input, pad=2):
+    """Shift input tensor right to create decoder input. '2' denotes <S>"""
+    return tf.concat((tf.ones_like(input[:, :1]) * pad, input[:, :-1]), 1)
