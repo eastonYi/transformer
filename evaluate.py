@@ -134,8 +134,9 @@ class Evaluator(object):
 
         scores = scores.reshape([batch_size, beam_size])
         preds = preds.reshape([batch_size, beam_size, -1])  # [batch_size, beam_size, max_length]
-        # lengths = np.sum(np.not_equal(preds, 3), axis=-1)   # [batch_size, beam_size]
-        # scores /= lengths  # The simplest version of length penalty.
+        lengths = np.sum(np.not_equal(preds, 3), axis=-1)   # [batch_size, beam_size]
+        lp = ((5 + lengths) / (5 + 1)) ** self.config.test.lp_alpha   # Length penalty
+        scores /= lp                                                  # following GNMT.
         max_indices = np.argmax(scores, axis=-1)   # [batch_size]
         max_indices += np.array(range(batch_size)) * beam_size
         preds = preds.reshape([batch_size * beam_size, -1])

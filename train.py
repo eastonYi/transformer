@@ -1,6 +1,7 @@
 from __future__ import print_function
 import yaml
 import time
+import os
 import logging
 from argparse import ArgumentParser
 import tensorflow as tf
@@ -32,20 +33,28 @@ def train(config):
                 # saver_partial.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
                 # print('Restore partial model from %s.' % config.train.logdir)
                 saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
-                logger.info('Restore model from %s.' % config.train.logdir)
             except:
                 logger.info('Failed to reload model.')
             for epoch in range(1, config.train.num_epochs+1):
                 for batch in du.get_training_batches_with_buckets():
                     start_time = time.time()
-                    step, lr, gnorm, loss, acc, summary, _ = sess.run([model.global_step, model.learning_rate, model.grads_norm,
-                                                                       model.loss, model.acc, model.summary_op, model.train_op],
-                                                                      feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
-                    logger.info('epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
-                          format(epoch, step, lr, gnorm, loss, acc, time.time()-start_time))
+                    step = sess.run(model.global_step)
                     # Summary
                     if step % config.train.summary_freq == 0:
+                        step, lr, gnorm, loss, acc, summary, _ = sess.run(
+                            [model.global_step, model.learning_rate, model.grads_norm,
+                             model.loss, model.acc, model.summary_op, model.train_op],
+                            feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
                         summary_writer.add_summary(summary, global_step=step)
+                    else:
+                        step, lr, gnorm, loss, acc, _ = sess.run(
+                            [model.global_step, model.learning_rate, model.grads_norm,
+                             model.loss, model.acc, model.train_op],
+                            feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
+                    logger.info(
+                        'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
+                        format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
+
                     # Save model
                     if step % config.train.save_freq == 0:
                         mp = config.train.logdir + '/model_epoch_%d_step_%d' % (epoch, step)
@@ -56,12 +65,14 @@ def train(config):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--config', dest='config')
+    parser.add_argument('-c', '--config', dest='config')
     args = parser.parse_args()
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
     # Logger
-    logging.basicConfig(filename=config.train.logdir+'/train.log', filemode='wp', level=logging.DEBUG)
+    if not os.path.exists(config.train.logdir):
+        os.makedirs(config.train.logdir)
+    logging.basicConfig(filename=config.train.logdir+'/train.log', level=logging.DEBUG)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     logging.getLogger('').addHandler(console)

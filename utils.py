@@ -89,7 +89,7 @@ class DataUtil(object):
         Generate batches according to bucket setting.
         """
 
-        buckets = [(i, i) for i in range(10, 100, 10)] + [(self.config.train.max_length, self.config.train.max_length)]
+        buckets = [(i, i) for i in range(10, 100, 5)] + [(self.config.train.max_length, self.config.train.max_length)]
 
         def select_bucket(sl, dl):
             for l1, l2 in buckets:
@@ -132,9 +132,10 @@ class DataUtil(object):
                 yield batch
                 caches[bucket] = [[], [], 0, 0]
 
-        # Clean remain sentences
+        # Clean remain sentences.
         for bucket in buckets:
-            if len(caches[bucket][0]) > 10:  # If there are more than 20 sentences in the bucket.
+            # Ensure each device at least get one sample.
+            if len(caches[bucket][0]) > len(self.config.train.devices.split(',')):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
             self._logger.debug(
                 'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))

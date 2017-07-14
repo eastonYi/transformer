@@ -4,7 +4,7 @@ import numpy as np
 import logging
 
 from tensor2tensor.common_attention import multihead_attention, add_timing_signal_1d, attention_bias_ignore_padding, attention_bias_lower_triangle
-from tensor2tensor.common_layers import layer_norm, embedding, conv_hidden_relu, smoothing_cross_entropy
+from tensor2tensor.common_layers import layer_norm, conv_hidden_relu, smoothing_cross_entropy
 
 INT_TYPE = np.int32
 FLOAT_TYPE = np.float32
@@ -16,6 +16,7 @@ class Model(object):
         self.config = config
         self._logger = logging.getLogger('model')
         self._prepared = False
+        self._summary = True
 
     def prepare(self, is_training):
         assert not self._prepared
@@ -32,17 +33,19 @@ class Model(object):
                     # Preparing optimizer.
                     self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
                                                        trainable=False, initializer=tf.zeros_initializer)
-                    self.learning_rate = self.config.train.learning_rate * learning_rate_decay(self.config, self.global_step)
-                    if self.config.train.optimizer == 'normal_adam':
-                        self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
+                    self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
+                    if self.config.train.optimizer == 'adam':
                         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                    elif self.config.train.optimizer == 'adam':
-                        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate, beta1=0.9, beta2=0.98, epsilon=1e-9)
+                    elif self.config.train.optimizer == 'adam_decay':
+                        self.learning_rate = learning_rate_decay(self.config, self.global_step)
+                        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
+                                                                beta1=0.9, beta2=0.98, epsilon=1e-9)
                     elif self.config.train.optimizer == 'sgd':
                         self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
                     elif self.config.train.optimizer == 'mom':
                         self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
         self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
+        # self._initializer = tf.uniform_unit_scaling_initializer()
         self._prepared = True
 
     def build_train_model(self):
@@ -72,11 +75,13 @@ class Model(object):
 
                 # Clip gradients and then apply.
                 grads_and_vars = average_gradients(gv_list)
+                if self._summary:
+                    for g, v in grads_and_vars:
+                        tf.summary.histogram('variables/' + v.name.split(':')[0], v)
+                        tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
                 grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
                                                                 clip_norm=self.config.train.grads_clip)
                 grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
-                for g, v in grads_and_vars:
-                    tf.summary.histogram('gradients of ' + v.name, g)
                 self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
 
                 # Summaries
@@ -144,7 +149,7 @@ class Model(object):
             encoder_output = embedding(encoder_input,
                                        vocab_size=self.config.src_vocab_size,
                                        dense_size=self.config.hidden_units,
-                                       multiplier=self.config.hidden_units**0.5,
+                                       multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
                                        name="src_embedding")
             # Add positional signal
             encoder_output = add_timing_signal_1d(encoder_output)
@@ -168,7 +173,7 @@ class Model(object):
                                                   num_heads=self.config.num_heads,
                                                   dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   name='encoder_self_attention',
-                                                  summaries=True),
+                                                  summaries=self._summary),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -177,7 +182,8 @@ class Model(object):
                                               conv_hidden_relu(
                                                   inputs=encoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
-                                                  output_size=self.config.hidden_units),
+                                                  output_size=self.config.hidden_units,
+                                                  summaries=self._summary),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
         # Mask padding part to zeros.
@@ -193,7 +199,7 @@ class Model(object):
             decoder_output = embedding(decoder_input,
                                        vocab_size=self.config.dst_vocab_size,
                                        dense_size=self.config.hidden_units,
-                                       multiplier=self.config.hidden_units**0.5,
+                                       multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
                                        name="dst_embedding")
             # Positional Encoding
             decoder_output += add_timing_signal_1d(decoder_output)
@@ -216,10 +222,10 @@ class Model(object):
                                                   total_key_depth=self.config.hidden_units,
                                                   total_value_depth=self.config.hidden_units,
                                                   num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0,
+                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   output_depth=self.config.hidden_units,
                                                   name="decoder_self_attention",
-                                                  summaries=True),
+                                                  summaries=self._summary),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -233,9 +239,9 @@ class Model(object):
                                                   total_value_depth=self.config.hidden_units,
                                                   output_depth=self.config.hidden_units,
                                                   num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0,
+                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   name="decoder_vanilla_attention",
-                                                  summaries=True),
+                                                  summaries=self._summary),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -244,7 +250,8 @@ class Model(object):
                                               conv_hidden_relu(
                                                   decoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
-                                                  output_size=self.config.hidden_units),
+                                                  output_size=self.config.hidden_units,
+                                                  summaries=self._summary),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -252,7 +259,7 @@ class Model(object):
 
     def test_output(self, decoder_output, reuse):
         """During test, we only need the last prediction."""
-        with tf.variable_scope("output", reuse=reuse):
+        with tf.variable_scope("output",initializer=self._initializer,  reuse=reuse):
             last_logits = tf.layers.dense(decoder_output[:,-1], self.config.dst_vocab_size)
             last_preds = tf.to_int32(tf.arg_max(last_logits, dimension=-1))
             z = tf.nn.log_softmax(last_logits)
@@ -363,3 +370,14 @@ def learning_rate_decay(config, global_step):
 def shift_right(input, pad=2):
     """Shift input tensor right to create decoder input. '2' denotes <S>"""
     return tf.concat((tf.ones_like(input[:, :1]) * pad, input[:, :-1]), 1)
+
+
+def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
+    """Embed x of type int64 into dense vectors."""
+    with tf.variable_scope(
+        name, default_name="embedding", values=[x], reuse=reuse):
+        embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
+        emb_x = tf.gather(embedding_var, x)
+        if multiplier != 1.0:
+            emb_x *= multiplier
+        return emb_x

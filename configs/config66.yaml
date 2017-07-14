@@ -1,0 +1,41 @@
+---
+src_vocab: '/data2/cqwang/ende/vocab.bpe.32000'
+dst_vocab: '/data2/cqwang/ende/vocab.bpe.32000'
+src_vocab_size: 32000
+dst_vocab_size: 32000
+hidden_units: 512
+attention_dropout_rate: 0.0
+residual_dropout_rate: 0.1
+num_blocks: 6
+num_heads: 8
+scale_embedding: True
+train:
+    devices: '0,1,2,3,4,5,6,7'  # Which devices will be used for training.
+    src_path: '/data2/cqwang/ende/train.tok.clean.bpe.32000.en'
+    dst_path: '/data2/cqwang/ende/train.tok.clean.bpe.32000.de'
+    batch_size: 256
+    tokens_per_batch: 14000
+    max_length: 100
+    num_epochs: 500
+    logdir: 'model3'
+    save_freq: 1000
+    summary_freq: 100
+    grads_clip: 5
+    optimizer: 'adam_decay'
+    learning_rate: 0.1
+    learning_rate_warmup_steps: 4000
+    label_smoothing: 0.1
+test:
+    src_path: '/data2/cqwang/ende/newstest2014.tok.bpe.32000.en'
+    dst_path: '/data2/cqwang/ende/newstest2014.tok.bpe.32000.de'
+    ori_dst_path: '/data2/cqwang/ende/newstest2014.tok.de' # No preprocessing performed, BPE .etc.
+    output_path: '/data2/cqwang/ende/newstest2014.de.output'
+#    src_path: '/data2/cqwang/ende/newstest2013.tok.bpe.32000.en'
+#    dst_path: '/data2/cqwang/ende/newstest2013.tok.bpe.32000.de'
+#    ori_dst_path: '/data2/cqwang/ende/newstest2013.tok.de' # No preprocessing performed, BPE .etc.
+#    output_path: '/data2/cqwang/ende/newstest2013.de.output'
+    batch_size: 256
+    max_target_length: 200
+    beam_size: 4
+    lp_alpha: 0.6 # Length penalty alpha
+    devices: '0,1,2,3,4,5,6,7' # Which devices will be used for test.

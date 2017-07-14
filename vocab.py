@@ -8,7 +8,7 @@ Modified by Chunqi Wang in July 2017.
 """
 from __future__ import print_function
 import codecs
-import regex
+import re as regex
 import yaml
 from argparse import ArgumentParser
 from collections import Counter
@@ -26,7 +26,6 @@ def make_vocab(fpath, fname):
     Writes vocabulary line by line to `fname`.
     """
     text = codecs.open(fpath, 'r', 'utf-8').read()
-    text = regex.sub("[^\s\p{Latin}']", "", text)
     words = text.split()
     word2cnt = Counter(words)
     with codecs.open(fname, 'w', 'utf-8') as fout:
@@ -36,10 +35,10 @@ def make_vocab(fpath, fname):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--config', dest='config')
+    parser.add_argument('-c', '--config', dest='config')
     args = parser.parse_args()
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
-    make_vocab(config.train.src_path, config.scr_vocab)
+    make_vocab(config.train.src_path, config.src_vocab)
     make_vocab(config.train.dst_path, config.dst_vocab)
     print("Done")
