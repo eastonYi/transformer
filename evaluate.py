@@ -185,7 +185,7 @@ class Evaluator(object):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--config', dest='config')
+    parser.add_argument('-c', '--config', dest='config')
     args = parser.parse_args()
     # Read config
     config = AttrDict(yaml.load(open(args.config)))

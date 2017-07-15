@@ -5,7 +5,7 @@ Some core code is taken from <https://github.com/tensorflow/tensor2tensor>.
 
 ## Highlight Features
 - Data processing with bucket mechanism. This allow higher utilization of computational resources.
-- Beam search that supporting batch input.
+- Beam search that support batching and length penalty.
 - Using yaml to config all hyper-parameters, as well as other settings.
 
 ## Contact

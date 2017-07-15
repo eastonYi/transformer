@@ -31,6 +31,9 @@ class DataUtil(object):
         self.load_vocab()
 
     def load_vocab(self):
+        """
+        Load vocab from disk. The fisrt four items in the vocab should be <PAD>, <UNK>, <S>, </S>
+        """
 
         def load_vocab_(path, vocab_size):
             vocab = [line.split()[0] for line in codecs.open(path, 'r', 'utf-8')]
@@ -220,12 +223,10 @@ class DataUtil(object):
     def create_batch(self, sents, o):
         # Convert words to indices.
         assert o in ('src', 'dst')
+        word2idx = self.src2idx if o == 'src' else self.dst2idx
         indices = []
         for sent in sents:
-            if o == 'src':
-                x = [self.src2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
-            else:
-                x = [self.dst2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
+            x = [word2idx.get(word, 1) for word in (sent + [u"</S>"])]  # 1: OOV, </S>: End of Text
             indices.append(x)
 
         # Pad to the same length.
@@ -236,14 +237,16 @@ class DataUtil(object):
 
         return X
 
-    def indices_to_words(self, Y):
+    def indices_to_words(self, Y, o='dst'):
+        assert o in ('src', 'dst')
+        idx2word = self.idx2src if o == 'src' else self.idx2dst
         sents = []
         for y in Y: # for each sentence
             sent = []
             for i in y: # For each word
                 if i == 3:  # </S>
                     break
-                w = self.idx2dst[i]
+                w = idx2word[i]
                 sent.append(w)
             sents.append(' '.join(sent))
         return sents
