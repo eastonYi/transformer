@@ -25,9 +25,10 @@ def make_vocab(fpath, fname):
     
     Writes vocabulary line by line to `fname`.
     """
-    text = codecs.open(fpath, 'r', 'utf-8').read()
-    words = text.split()
-    word2cnt = Counter(words)
+    word2cnt = Counter()
+    for l in codecs.open(fpath, 'r', 'utf-8'):
+        words = l.split()
+        word2cnt.update(Counter(words))
     with codecs.open(fname, 'w', 'utf-8') as fout:
         fout.write("{}\t1000000000\n{}\t1000000000\n{}\t1000000000\n{}\t1000000000\n".format("<PAD>", "<UNK>", "<S>", "</S>"))
         for word, cnt in word2cnt.most_common(len(word2cnt)):

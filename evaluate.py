@@ -1,6 +1,7 @@
 from __future__ import print_function
 import codecs
 import os
+import path
 import tensorflow as tf
 import numpy as np
 import yaml
@@ -23,6 +24,8 @@ class Evaluator(object):
         # Load model
         self.model = Model(config)
         self.model.build_test_model()
+
+        self.du = DataUtil(config)
 
         # Create session
         sess_config = tf.ConfigProto()
@@ -146,41 +149,51 @@ class Evaluator(object):
     def loss(self, X, Y):
         return self.sess.run(self.model.loss_sum, feed_dict={self.model.src_pl: X, self.model.dst_pl: Y})
 
-    def evaluate(self):
-        # Load data
-        du = DataUtil(self.config)
+    def translate(self):
+        logging.info('Translate %s.' % self.config.test.src_path)
         _, tmp = mkstemp()
         fd = codecs.open(tmp, 'w', 'utf8')
         count = 0
-        token_count = 0
-        loss_sum = 0
         start = time.time()
-        for batch in du.get_test_batches_with_target():
-            # if config.test.beam_size == 1:
-            #     Y = self.greedy_search(X)
-            # else:
-            #     Y = self.beam_search(X)
-            X, Y = batch
-            Yp = self.beam_search(X)
-
-            loss_sum += self.loss(X, Y)
-            token_count += np.sum(np.greater(Y, 0))
-
-            sents = du.indices_to_words(Yp)
+        for X in self.du.get_test_batches():
+            Y = self.beam_search(X)
+            sents = self.du.indices_to_words(Y)
             for sent in sents:
                 print(sent, file=fd)
-            count += len(batch[0])
+            count += len(X)
             logging.info('%d sentences processed in %.2f minutes.' % (count, (time.time()-start) / 60))
         fd.close()
-
         # Remove BPE flag, if have.
         os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, self.config.test.output_path))
+        logging.info('The result file was saved in %s.' % self.config.test.output_path)
 
+    def ppl(self):
+        if 'dst_path' not in self.config.test:
+            logging.warning("Skip PPL calculation due to missing of parameter 'dst_path' in config file.")
+            return
+        logging.info('Calculate PPL for %s and %s.' % (self.config.test.src_path, self.config.test.dst_path))
+        token_count = 0
+        loss_sum = 0
+        for batch in self.du.get_test_batches_with_target():
+            X, Y = batch
+            loss_sum += self.loss(X, Y)
+            token_count += np.sum(np.greater(Y, 0))
         # Compute PPL
         logging.info('PPL: %.4f' % np.exp(loss_sum / token_count))
 
+    def evaluate(self):
+        self.translate()
+        if 'eval_script' in self.config.test:
+            script_path = self.config.test.eval_script
+        else:
+            script_path = 'multi-bleu.perl'
+        script_interpreter = script_path.rsplit('.', 1)[1]
+        script_dir = os.path.dirname(script_path) or '.'
+        os.chdir(script_dir)
         # Call a script to evaluate.
-        os.system("perl multi-bleu.perl %s < %s" % (self.config.test.ori_dst_path, self.config.test.output_path))
+        os.system("%s %s %s < %s" % (script_interpreter, script_path, self.config.test.ori_dst_path,
+                                     self.config.test.output_path))
+        self.ppl()
 
 
 if __name__ == '__main__':

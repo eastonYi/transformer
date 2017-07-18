@@ -165,7 +165,7 @@ class DataUtil(object):
 
         os.system('shuf %s > %s' % (tpath, tpath + '.shuf'))
 
-        fds = [open(ff + '.shuf', 'w') for ff in list_of_files]
+        fds = [open(ff + '.{}.shuf'.format(os.getpid()), 'w') for ff in list_of_files]
 
         for l in open(tpath + '.shuf'):
             s = l.strip().split('|||||')
@@ -177,7 +177,7 @@ class DataUtil(object):
         os.remove(tpath)
         os.remove(tpath + '.shuf')
 
-        return [ff + '.shuf' for ff in list_of_files]
+        return [ff + '.{}.shuf'.format(os.getpid()) for ff in list_of_files]
 
     def get_test_batches(self):
         src_path = self.config.test.src_path
