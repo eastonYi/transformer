@@ -24,28 +24,13 @@ class Model(object):
         # Select devices according to running is_training flag.
         devices = self.config.train.devices if is_training else self.config.test.devices
         self.devices = ['/gpu:'+i for i in devices.split(',')] or ['/cpu:0']
-        # If we have multiple devices (typically GPUs), we set /cpu:0 as the sync device.
-        self.sync_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
+        # If we have multiple devices (typically GPUs), we set /cpu:0 as the caching device.
 
         if is_training:
-            with self.graph.as_default():
-                with tf.device(self.sync_device):
-                    # Preparing optimizer.
-                    self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
-                                                       trainable=False, initializer=tf.zeros_initializer)
-                    self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
-                    if self.config.train.optimizer == 'adam':
-                        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                    elif self.config.train.optimizer == 'adam_decay':
-                        self.learning_rate = learning_rate_decay(self.config, self.global_step)
-                        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                                                beta1=0.9, beta2=0.98, epsilon=1e-9)
-                    elif self.config.train.optimizer == 'sgd':
-                        self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
-                    elif self.config.train.optimizer == 'mom':
-                        self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
-        self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
-        # self._initializer = tf.uniform_unit_scaling_initializer()
+            self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
+            self._caching_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
+            self._sync_device = self._caching_device
+
         self._prepared = True
 
     def build_train_model(self):
@@ -54,42 +39,61 @@ class Model(object):
         self.prepare(is_training=True)
 
         with self.graph.as_default():
-            with tf.device(self.sync_device):
-                self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-                self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
-                Xs = split_tensor(self.src_pl, len(self.devices))
-                Ys = split_tensor(self.dst_pl, len(self.devices))
-                acc_list, loss_list, gv_list = [], [], []
-                for i, (X, Y, device) in enumerate(zip(Xs, Ys, self.devices)):
-                    with tf.device(lambda op: self.choose_device(op, device)):
-                        self._logger.info('Build model on %s.' % device)
-                        encoder_output = self.encoder(X, reuse=i>0 or None)
-                        decoder_output = self.decoder(shift_right(Y), encoder_output, reuse=i > 0 or None)
-                        acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
-                        acc_list.append(acc)
-                        loss_list.append(loss)
-                        gv_list.append(self.optimizer.compute_gradients(loss))
+            with tf.device(self._sync_device):
 
-                self.acc = tf.reduce_mean(acc_list)
-                self.loss = tf.reduce_mean(loss_list)
+                # Optimizer.
+                self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
+                                                   trainable=False, initializer=tf.zeros_initializer)
+                self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
+                if self.config.train.optimizer == 'adam':
+                    self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                elif self.config.train.optimizer == 'adam_decay':
+                    self.learning_rate = learning_rate_decay(self.config, self.global_step)
+                    self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
+                                                            beta1=0.9, beta2=0.98, epsilon=1e-9)
+                elif self.config.train.optimizer == 'sgd':
+                    self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+                elif self.config.train.optimizer == 'mom':
+                    self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
-                # Clip gradients and then apply.
-                grads_and_vars = average_gradients(gv_list)
-                if self._summary:
-                    for g, v in grads_and_vars:
-                        tf.summary.histogram('variables/' + v.name.split(':')[0], v)
-                        tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
-                grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
-                                                                clip_norm=self.config.train.grads_clip)
-                grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
-                self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+                with tf.variable_scope(tf.get_variable_scope(),
+                                       initializer=self._initializer,
+                                       caching_device=self._caching_device):
+                    self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
+                    self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
+                    Xs = split_tensor(self.src_pl, len(self.devices))
+                    Ys = split_tensor(self.dst_pl, len(self.devices))
+                    acc_list, loss_list, gv_list = [], [], []
+                    for i, (X, Y, device) in enumerate(zip(Xs, Ys, self.devices)):
+                        with tf.device(device):
+                            self._logger.info('Build model on %s.' % device)
+                            encoder_output = self.encoder(X, reuse=i>0 or None)
+                            decoder_output = self.decoder(shift_right(Y), encoder_output, reuse=i > 0 or None)
+                            acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
+                            acc_list.append(acc)
+                            loss_list.append(loss)
+                            gv_list.append(self.optimizer.compute_gradients(loss))
 
-                # Summaries
-                tf.summary.scalar('acc', self.acc)
-                tf.summary.scalar('loss', self.loss)
-                tf.summary.scalar('learning_rate', self.learning_rate)
-                tf.summary.scalar('grads_norm', self.grads_norm)
-                self.summary_op = tf.summary.merge_all()
+                    self.acc = tf.reduce_mean(acc_list)
+                    self.loss = tf.reduce_mean(loss_list)
+
+                    # Clip gradients and then apply.
+                    grads_and_vars = average_gradients(gv_list)
+                    if self._summary:
+                        for g, v in grads_and_vars:
+                            tf.summary.histogram('variables/' + v.name.split(':')[0], v)
+                            tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
+                    grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
+                                                                    clip_norm=self.config.train.grads_clip)
+                    grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
+                    self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+
+                    # Summaries
+                    tf.summary.scalar('acc', self.acc)
+                    tf.summary.scalar('loss', self.loss)
+                    tf.summary.scalar('learning_rate', self.learning_rate)
+                    tf.summary.scalar('grads_norm', self.grads_norm)
+                    self.summary_op = tf.summary.merge_all()
 
     def build_test_model(self):
         """Build model for testing."""
@@ -97,52 +101,45 @@ class Model(object):
         self.prepare(is_training=False)
 
         with self.graph.as_default():
-            with tf.device(self.sync_device):
-                self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-                self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
-                self.decoder_input = shift_right(self.dst_pl)
-                Xs = split_tensor(self.src_pl, len(self.devices))
-                Ys = split_tensor(self.dst_pl, len(self.devices))
-                dec_inputs = split_tensor(self.decoder_input, len(self.devices))
+            self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
+            self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
+            self.decoder_input = shift_right(self.dst_pl)
+            Xs = split_tensor(self.src_pl, len(self.devices))
+            Ys = split_tensor(self.dst_pl, len(self.devices))
+            dec_inputs = split_tensor(self.decoder_input, len(self.devices))
 
-                # Encode
-                encoder_output_list = []
-                for i, (X, device) in enumerate(zip(Xs, self.devices)):
-                    with tf.device(lambda op: self.choose_device(op, device)):
-                        encoder_output = self.encoder(X, reuse=i > 0 or None)
-                        encoder_output_list.append(encoder_output)
-                self.encoder_output = tf.concat(encoder_output_list, axis=0)
+            # Encode
+            encoder_output_list = []
+            for i, (X, device) in enumerate(zip(Xs, self.devices)):
+                with tf.device(device):
+                    encoder_output = self.encoder(X, reuse=i > 0 or None)
+                    encoder_output_list.append(encoder_output)
+            self.encoder_output = tf.concat(encoder_output_list, axis=0)
 
-                # Decode
-                enc_outputs = split_tensor(self.encoder_output, len(self.devices))
-                preds_list, k_preds_list, k_scores_list = [], [], []
-                self.loss_sum = 0.0
-                for i, (X, enc_output, dec_input, Y, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, Ys, self.devices)):
-                    with tf.device(lambda op: self.choose_device(op, device)):
-                        self._logger.info('Build model on %s.' % device)
-                        decoder_output = self.decoder(dec_input, enc_output, reuse=i > 0 or None)
-                        # Predictions
-                        preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
-                        preds_list.append(preds)
-                        k_preds_list.append(k_preds)
-                        k_scores_list.append(k_scores)
-                        # Loss
-                        loss = self.test_loss(decoder_output, Y, reuse=True)
-                        self.loss_sum += loss
+            # Decode
+            enc_outputs = split_tensor(self.encoder_output, len(self.devices))
+            preds_list, k_preds_list, k_scores_list = [], [], []
+            self.loss_sum = 0.0
+            for i, (X, enc_output, dec_input, Y, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, Ys, self.devices)):
+                with tf.device(device):
+                    self._logger.info('Build model on %s.' % device)
+                    decoder_output = self.decoder(dec_input, enc_output, reuse=i > 0 or None)
+                    # Predictions
+                    preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
+                    preds_list.append(preds)
+                    k_preds_list.append(k_preds)
+                    k_scores_list.append(k_scores)
+                    # Loss
+                    loss = self.test_loss(decoder_output, Y, reuse=True)
+                    self.loss_sum += loss
 
-                self.preds = tf.concat(preds_list, axis=0)
-                self.k_preds = tf.concat(k_preds_list, axis=0)
-                self.k_scores = tf.concat(k_scores_list, axis=0)
-
-    def choose_device(self, op, device):
-        """Choose a device according the op's type."""
-        if op.type.startswith('Variable'):
-            return self.sync_device
-        return device
+            self.preds = tf.concat(preds_list, axis=0)
+            self.k_preds = tf.concat(k_preds_list, axis=0)
+            self.k_scores = tf.concat(k_scores_list, axis=0)
 
     def encoder(self, encoder_input, reuse):
         """Transformer encoder."""
-        with tf.variable_scope("encoder", initializer=self._initializer, reuse=reuse):
+        with tf.variable_scope("encoder", reuse=reuse):
             # Mask
             encoder_padding = tf.equal(encoder_input, 0)
             # Embedding
@@ -192,7 +189,7 @@ class Model(object):
 
     def decoder(self, decoder_input, encoder_output, reuse):
         """Transformer decoder"""
-        with tf.variable_scope("decoder", initializer=self._initializer, reuse=reuse):
+        with tf.variable_scope("decoder", reuse=reuse):
             encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
             encoder_attention_bias = attention_bias_ignore_padding(encoder_padding)
 
@@ -259,7 +256,7 @@ class Model(object):
 
     def test_output(self, decoder_output, reuse):
         """During test, we only need the last prediction."""
-        with tf.variable_scope("output",initializer=self._initializer,  reuse=reuse):
+        with tf.variable_scope("output", reuse=reuse):
             last_logits = tf.layers.dense(decoder_output[:,-1], self.config.dst_vocab_size)
             last_preds = tf.to_int32(tf.arg_max(last_logits, dimension=-1))
             z = tf.nn.log_softmax(last_logits)
@@ -268,7 +265,7 @@ class Model(object):
         return last_preds, last_k_preds, last_k_scores
 
     def test_loss(self, decoder_output, Y, reuse):
-        with tf.variable_scope("output", initializer=self._initializer, reuse=reuse):
+        with tf.variable_scope("output", reuse=reuse):
             logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
             mask = tf.to_float(tf.not_equal(Y, 0))
             labels = tf.one_hot(Y, depth=self.config.dst_vocab_size)
@@ -278,7 +275,7 @@ class Model(object):
 
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
-        with tf.variable_scope("output", initializer=self._initializer, reuse=reuse):
+        with tf.variable_scope("output", reuse=reuse):
             logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
             preds = tf.to_int32(tf.arg_max(logits, dimension=-1))
             mask = tf.to_float(tf.not_equal(Y, 0))
