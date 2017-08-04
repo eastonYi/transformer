@@ -1,7 +1,6 @@
 from __future__ import print_function
 import codecs
 import os
-import path
 import tensorflow as tf
 import numpy as np
 import yaml
@@ -50,9 +49,9 @@ class Evaluator(object):
             A 2-d array with size [n, dst_length], destination sentence indices.
         """
         encoder_output = self.sess.run(self.model.encoder_output, feed_dict={self.model.src_pl: X})
-        preds = np.ones([X.shape[0], 1], dtype=INT_TYPE) * 2 # <S>
+        preds = np.ones([X.shape[0], 1], dtype=INT_TYPE) * 2  # <S>
         finish = np.zeros(X.shape[0:1], dtype=np.bool)
-        for i in xrange(config.test.max_target_length):
+        for i in xrange(min(config.test.max_target_length, X.shape[1] + 50)):
             last_preds = self.sess.run(self.model.preds, feed_dict={self.model.encoder_output: encoder_output,
                                                                     self.model.decoder_input: preds})
             finish += last_preds == 3   # </S>
@@ -108,7 +107,7 @@ class Evaluator(object):
         encoder_output = np.repeat(encoder_output, beam_size, axis=0)   # shape: [batch_size * beam_size, hidden_units]
         preds = np.ones([batch_size * beam_size, 1], dtype=INT_TYPE) * 2  # [[<S>, <S>, ..., <S>]], shape: [batch_size * beam_size, 1]
         scores = np.array(([0.0] + [-inf] * (beam_size - 1)) * batch_size)  # [0, -inf, -inf ,..., 0, -inf, -inf, ...], shape: [batch_size * beam_size]
-        for i in xrange(config.test.max_target_length):
+        for i in xrange(min(config.test.max_target_length, X.shape[1] + 50)):
             # Whether sequences finished.
             bias = np.equal(preds[:, -1], 3)   # </S>?
             # If all sequences finished, break the loop.
@@ -154,6 +153,7 @@ class Evaluator(object):
         _, tmp = mkstemp()
         fd = codecs.open(tmp, 'w', 'utf8')
         count = 0
+        token_count = 0
         start = time.time()
         for X in self.du.get_test_batches():
             Y = self.beam_search(X)
@@ -161,7 +161,10 @@ class Evaluator(object):
             for sent in sents:
                 print(sent, file=fd)
             count += len(X)
-            logging.info('%d sentences processed in %.2f minutes.' % (count, (time.time()-start) / 60))
+            token_count += np.sum(np.greater(Y, 0))
+            time_span = time.time() - start
+            logging.info('{0} sentences ({1} tokens) processed in {2:.2f} minutes (speed: {3:.4f} sec/token).'.
+                         format(count, token_count, time_span / 60, time_span / token_count))
         fd.close()
         # Remove BPE flag, if have.
         os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, self.config.test.output_path))

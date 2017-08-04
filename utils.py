@@ -28,7 +28,13 @@ class DataUtil(object):
     def __init__(self, config):
         self.config = config
         self._logger = logging.getLogger('util')
+        self._tmps = set()
         self.load_vocab()
+
+    def __del__(self):
+        for fname in self._tmps:
+            if os.path.exists(fname):
+                os.remove(fname)
 
     def load_vocab(self):
         """
@@ -106,6 +112,8 @@ class DataUtil(object):
         if shuffle:
             self._logger.debug('Shuffle files %s and %s.' % (src_path, dst_path))
             src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
+            self._tmps.add(src_shuf_path)
+            self._tmps.add(dst_shuf_path)
         else:
             src_shuf_path = src_path
             dst_shuf_path = dst_path
@@ -148,6 +156,8 @@ class DataUtil(object):
         if shuffle:
             os.remove(src_shuf_path)
             os.remove(dst_shuf_path)
+            self._tmps.remove(src_shuf_path)
+            self._tmps.remove(dst_shuf_path)
 
     @staticmethod
     def shuffle(list_of_files):

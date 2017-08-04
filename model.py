@@ -16,31 +16,17 @@ class Model(object):
         self.config = config
         self._logger = logging.getLogger('model')
         self._prepared = False
-        self._summary = True
 
     def prepare(self, is_training):
         assert not self._prepared
         self.is_training = is_training
-        # Select devices according to running is_training flag.
+
+        # Select devices according to is_training flag.
         devices = self.config.train.devices if is_training else self.config.test.devices
-        self.devices = ['/gpu:'+i for i in devices.split(',')] or ['/cpu:0']
-        # If we have multiple devices (typically GPUs), we set /cpu:0 as the caching device.
+        self.devices = ['/gpu:'+i.strip() for i in devices.split(',') if i] or ['/cpu:0']
 
         if is_training:
-            self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
-            self._caching_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
-            self._sync_device = self._caching_device
-
-        self._prepared = True
-
-    def build_train_model(self):
-        """Build model for training. """
-
-        self.prepare(is_training=True)
-
-        with self.graph.as_default():
-            with tf.device(self._sync_device):
-
+            with self.graph.as_default():
                 # Optimizer.
                 self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
                                                    trainable=False, initializer=tf.zeros_initializer)
@@ -56,44 +42,60 @@ class Model(object):
                 elif self.config.train.optimizer == 'mom':
                     self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
-                with tf.variable_scope(tf.get_variable_scope(),
-                                       initializer=self._initializer,
-                                       caching_device=self._caching_device):
-                    self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-                    self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
-                    Xs = split_tensor(self.src_pl, len(self.devices))
-                    Ys = split_tensor(self.dst_pl, len(self.devices))
-                    acc_list, loss_list, gv_list = [], [], []
-                    for i, (X, Y, device) in enumerate(zip(Xs, Ys, self.devices)):
-                        with tf.device(device):
-                            self._logger.info('Build model on %s.' % device)
-                            encoder_output = self.encoder(X, reuse=i>0 or None)
-                            decoder_output = self.decoder(shift_right(Y), encoder_output, reuse=i > 0 or None)
-                            acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
-                            acc_list.append(acc)
-                            loss_list.append(loss)
-                            gv_list.append(self.optimizer.compute_gradients(loss))
+            # Uniform scaling initializer.
+            self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
 
-                    self.acc = tf.reduce_mean(acc_list)
-                    self.loss = tf.reduce_mean(loss_list)
+            # If we have multiple devices (typically GPUs), we set /cpu:0 as the caching device.
+            self._sync_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
 
-                    # Clip gradients and then apply.
-                    grads_and_vars = average_gradients(gv_list)
-                    if self._summary:
-                        for g, v in grads_and_vars:
-                            tf.summary.histogram('variables/' + v.name.split(':')[0], v)
-                            tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
-                    grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
-                                                                    clip_norm=self.config.train.grads_clip)
-                    grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
-                    self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+        self._prepared = True
 
-                    # Summaries
-                    tf.summary.scalar('acc', self.acc)
-                    tf.summary.scalar('loss', self.loss)
-                    tf.summary.scalar('learning_rate', self.learning_rate)
-                    tf.summary.scalar('grads_norm', self.grads_norm)
-                    self.summary_op = tf.summary.merge_all()
+    def build_train_model(self):
+        """Build model for training. """
+
+        self.prepare(is_training=True)
+
+        def choose_device(op, device):
+            if op.type.startswith('Variable'):
+                return self._sync_device
+            return device
+
+        with self.graph.as_default(), tf.device(self._sync_device), \
+             tf.variable_scope(tf.get_variable_scope(), initializer=self._initializer):
+            self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
+            self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
+            Xs = split_tensor(self.src_pl, len(self.devices))
+            Ys = split_tensor(self.dst_pl, len(self.devices))
+            acc_list, loss_list, gv_list = [], [], []
+            for i, (X, Y, device) in enumerate(zip(Xs, Ys, self.devices)):
+                with tf.device(lambda op: choose_device(op, device)):
+                    self._logger.info('Build model on %s.' % device)
+                    encoder_output = self.encoder(X, reuse=i>0 or None)
+                    decoder_output = self.decoder(shift_right(Y), encoder_output, reuse=i > 0 or None)
+                    acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
+                    acc_list.append(acc)
+                    loss_list.append(loss)
+                    gv_list.append(self.optimizer.compute_gradients(loss))
+
+            self.acc = tf.reduce_mean(acc_list)
+            self.loss = tf.reduce_mean(loss_list)
+
+            # Clip gradients and then apply.
+            grads_and_vars = average_gradients(gv_list)
+            for g, v in grads_and_vars:
+                tf.summary.histogram('variables/' + v.name.split(':')[0], v)
+                tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
+            grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
+                                                            clip_norm=self.config.train.grads_clip)
+            grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
+            self.train_op = self.optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
+
+            # Summaries
+            tf.summary.scalar('acc', self.acc)
+            tf.summary.scalar('loss', self.loss)
+            tf.summary.scalar('learning_rate', self.learning_rate)
+            tf.summary.scalar('grads_norm', self.grads_norm)
+            self.summary_op = tf.summary.merge_all()
 
     def build_test_model(self):
         """Build model for testing."""
@@ -170,7 +172,7 @@ class Model(object):
                                                   num_heads=self.config.num_heads,
                                                   dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   name='encoder_self_attention',
-                                                  summaries=self._summary),
+                                                  summaries=True),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -180,7 +182,7 @@ class Model(object):
                                                   inputs=encoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
                                                   output_size=self.config.hidden_units,
-                                                  summaries=self._summary),
+                                                  summaries=True),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
         # Mask padding part to zeros.
@@ -222,7 +224,7 @@ class Model(object):
                                                   dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   output_depth=self.config.hidden_units,
                                                   name="decoder_self_attention",
-                                                  summaries=self._summary),
+                                                  summaries=True),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -238,7 +240,7 @@ class Model(object):
                                                   num_heads=self.config.num_heads,
                                                   dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
                                                   name="decoder_vanilla_attention",
-                                                  summaries=self._summary),
+                                                  summaries=True),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -248,7 +250,7 @@ class Model(object):
                                                   decoder_output,
                                                   hidden_size=4 * self.config.hidden_units,
                                                   output_size=self.config.hidden_units,
-                                                  summaries=self._summary),
+                                                  summaries=True),
                                               dropout_rate=self.config.residual_dropout_rate,
                                               is_training=self.is_training)
 
@@ -293,12 +295,12 @@ def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
     Note that this function provides a synchronization point across all towers.
     Args:
-      tower_grads: List of lists of (gradient, variable) tuples. The outer list
+        tower_grads: List of lists of (gradient, variable) tuples. The outer list
         is over individual gradients. The inner list is over the gradient
         calculation for each tower.
     Returns:
-       List of pairs of (gradient, variable) where the gradient has been averaged
-       across all towers.
+        List of pairs of (gradient, variable) where the gradient has been averaged
+        across all towers.
     """
     average_grads = []
     for grad_and_vars in zip(*tower_grads):

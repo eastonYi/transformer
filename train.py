@@ -27,13 +27,11 @@ def train(config):
         # saver_partial = tf.train.Saver(var_list=[v for v in tf.trainable_variables() if 'Adam' not in v.name])
 
         with tf.Session(config=sess_config) as sess:
-            # Initialize all variables.
-            sess.run(tf.global_variables_initializer())
             try:
-                # saver_partial.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
-                # print('Restore partial model from %s.' % config.train.logdir)
                 saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
             except:
+                # Initialize all variables.
+                sess.run(tf.global_variables_initializer())
                 logger.info('Failed to reload model.')
             for epoch in range(1, config.train.num_epochs+1):
                 for batch in du.get_training_batches_with_buckets():
