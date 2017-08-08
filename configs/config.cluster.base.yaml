@@ -40,4 +40,5 @@ test:
     max_target_length: 200
     lp_alpha: 0.6
     beam_size: 4
+    caching_decoder_outputs: False
     devices: ''
