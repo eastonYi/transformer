@@ -27,7 +27,7 @@ train:
     label_smoothing: 0.1
 test:
     src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/02.cws.bpe.end'
-    ori_dst_path: 'nist02.token.ref'
+    ori_dst_path: 'nist02tkref'
     output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/nmt.output'
     eval_script: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/postProcessAndTest.sh'
 
