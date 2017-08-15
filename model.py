@@ -41,13 +41,12 @@ class Model(object):
                     self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
             # Uniform scaling initializer.
-            self._initializer = tf.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
+            self._initializer = tf.uniform_unit_scaling_initializer()
 
         self._prepared = True
 
     def build_train_model(self):
         """Build model for training. """
-
         self.prepare(is_training=True)
 
         def choose_device(op, device):
@@ -94,10 +93,9 @@ class Model(object):
 
     def build_test_model(self):
         """Build model for inference."""
-
         self.prepare(is_training=False)
 
-        with self.graph.as_default():
+        with self.graph.as_default(), tf.device(self._sync_device):
             self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
             self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
             self.decoder_input = shift_right(self.dst_pl)
@@ -109,10 +107,20 @@ class Model(object):
             loss_sum=0
             for i, (X, Y, decoder_input, device) in enumerate(zip(Xs, Ys, decoder_inputs, self.devices)):
                 with tf.device(device):
-                    encoder_output = self.encoder(X, reuse=i > 0 or None)
-                    prediction = self.beam_search(encoder_output, reuse=i > 0 or None)
-                    decoder_output = self.decoder(decoder_input, encoder_output, reuse=True)
-                    loss = self.test_loss(decoder_output, Y, reuse=True)
+
+                    # Avoid errors occurred when the input is empty by a condition phrase.
+                    def true_fn():
+                        encoder_output = self.encoder(X, reuse=i > 0 or None)
+                        prediction = self.beam_search(encoder_output, reuse=i > 0 or None)
+                        decoder_output = self.decoder(decoder_input, encoder_output, reuse=True)
+                        loss = self.test_loss(decoder_output, Y, reuse=True)
+                        return prediction, loss
+
+                    def false_fn():
+                        return tf.zeros([0, 0], dtype=INT_TYPE), 0.0
+
+                    prediction, loss = tf.cond(tf.greater(tf.shape(X)[0], 0), true_fn, false_fn)
+
                     loss_sum += loss
                     prediction_list.append(prediction)
 
