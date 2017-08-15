@@ -5,6 +5,12 @@ import codecs
 import logging
 from tempfile import mkstemp
 from itertools import izip
+import tensorflow as tf
+
+from tensor2tensor import common_layers, common_attention
+
+INT_TYPE = np.int32
+FLOAT_TYPE = np.float32
 
 
 class AttrDict(dict):
@@ -262,3 +268,167 @@ class DataUtil(object):
                 sent.append(w)
             sents.append(' '.join(sent))
         return sents
+
+
+def average_gradients(tower_grads):
+    """Calculate the average gradient for each shared variable across all towers.
+    Note that this function provides a synchronization point across all towers.
+    Args:
+        tower_grads: List of lists of (gradient, variable) tuples. The outer list
+        is over individual gradients. The inner list is over the gradient
+        calculation for each tower.
+    Returns:
+        List of pairs of (gradient, variable) where the gradient has been averaged
+        across all towers.
+    """
+    average_grads = []
+    for grad_and_vars in zip(*tower_grads):
+        # Note that each grad_and_vars looks like the following:
+        #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
+        grads = []
+        for g, _ in grad_and_vars:
+            # Add 0 dimension to the gradients to represent the tower.
+            expanded_g = tf.expand_dims(g, 0)
+
+            # Append on a 'tower' dimension which we will average over below.
+            grads.append(expanded_g)
+        else:
+            # Average over the 'tower' dimension.
+            grad = tf.concat(axis=0, values=grads)
+            grad = tf.reduce_mean(grad, 0)
+
+            # Keep in mind that the Variables are redundant because they are shared
+            # across towers. So .. we will just return the first tower's pointer to
+            # the Variable.
+            v = grad_and_vars[0][1]
+            grad_and_var = (grad, v)
+            average_grads.append(grad_and_var)
+    return average_grads
+
+
+def residual(inputs, outputs, dropout_rate, is_training):
+    """Residual connection.
+
+    Args:
+        inputs: A Tensor.
+        outputs: A Tensor.
+        dropout_rate: A float.
+        is_training: A bool.
+
+    Returns:
+        A Tensor.
+    """
+    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=is_training)
+    output = common_layers.layer_norm(output)
+    return output
+
+
+def split_tensor(input, n):
+    """
+    Split the tensor input to n tensors.
+    Args:
+        inputs: A tensor with size [b, ...].
+        n: A integer.
+
+    Returns: A tensor list, each tensor has size [b/n, ...].
+    """
+    batch_size = tf.shape(input)[0]
+    ls = tf.cast(tf.lin_space(0.0, tf.cast(batch_size, FLOAT_TYPE), n + 1), INT_TYPE)
+    return [input[ls[i]:ls[i+1]] for i in range(n)]
+
+
+def learning_rate_decay(config, global_step):
+    """Inverse-decay learning rate until warmup_steps, then decay."""
+    warmup_steps = tf.to_float(config.train.learning_rate_warmup_steps)
+    global_step = tf.to_float(global_step)
+    return config.hidden_units ** -0.5 * tf.minimum(
+        (global_step + 1.0) * warmup_steps ** -1.5, (global_step + 1.0) ** -0.5)
+
+
+def shift_right(input, pad=2):
+    """Shift input tensor right to create decoder input. '2' denotes <S>"""
+    return tf.concat((tf.ones_like(input[:, :1]) * pad, input[:, :-1]), 1)
+
+
+def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
+    """Embed x of type int64 into dense vectors."""
+    with tf.variable_scope(
+        name, default_name="embedding", values=[x], reuse=reuse):
+        embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
+        emb_x = tf.gather(embedding_var, x)
+        if multiplier != 1.0:
+            emb_x *= multiplier
+        return emb_x
+
+
+def multihead_attention(query_antecedent,
+                        memory_antecedent,
+                        bias,
+                        total_key_depth,
+                        total_value_depth,
+                        output_depth,
+                        num_heads,
+                        dropout_rate,
+                        reserve_last=False,
+                        summaries=False,
+                        image_shapes=None,
+                        name=None):
+    """Multihead scaled-dot-product attention with input/output transformations.
+
+    Args:
+    query_antecedent: a Tensor with shape [batch, length_q, channels]
+    memory_antecedent: a Tensor with shape [batch, length_m, channels]
+    bias: bias Tensor (see attention_bias())
+    total_key_depth: an integer
+    total_value_depth: an integer
+    output_depth: an integer
+    num_heads: an integer dividing total_key_depth and total_value_depth
+    dropout_rate: a floating point number
+    reserve_last: a boolean
+    summaries: a boolean
+    image_shapes: optional quadruple of integer scalars for image summary.
+        If the query positions and memory positions represent the
+        pixels of a flattened image, then pass in their dimensions:
+          (query_rows, query_cols, memory_rows, memory_cols).
+    name: an optional string
+
+    Returns:
+    A Tensor.
+    """
+    with tf.variable_scope(
+        name,
+        default_name="multihead_attention",
+        values=[query_antecedent, memory_antecedent]):
+        if memory_antecedent is None:
+            # self attention
+            combined = common_layers.conv1d(
+              query_antecedent,
+              total_key_depth * 2 + total_value_depth,
+              1,
+              name="qkv_transform")
+            q, k, v = tf.split(
+              combined, [total_key_depth, total_key_depth, total_value_depth],
+              axis=2)
+        else:
+            q = common_layers.conv1d(
+              query_antecedent, total_key_depth, 1, name="q_transform")
+            combined = common_layers.conv1d(
+              memory_antecedent,
+              total_key_depth + total_value_depth,
+              1,
+              name="kv_transform")
+            k, v = tf.split(combined, [total_key_depth, total_value_depth], axis=2)
+
+        if reserve_last:
+            q = q[:, -1:, :]
+
+        q = common_attention.split_heads(q, num_heads)
+        k = common_attention.split_heads(k, num_heads)
+        v = common_attention.split_heads(v, num_heads)
+        key_depth_per_head = total_key_depth // num_heads
+        q *= key_depth_per_head**-0.5
+        x = common_attention.dot_product_attention(
+            q, k, v, bias, dropout_rate, summaries, image_shapes)
+        x = common_attention.combine_heads(x)
+        x = common_layers.conv1d(x, output_depth, 1, name="output_transform")
+        return x

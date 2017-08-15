@@ -1,13 +1,10 @@
 import tensorflow as tf
-from tensorflow.python.ops import init_ops
-import numpy as np
 import logging
 
 import tensor2tensor.common_attention as common_attention
 import tensor2tensor.common_layers as common_layers
-
-INT_TYPE = np.int32
-FLOAT_TYPE = np.float32
+from utils import FLOAT_TYPE, INT_TYPE, learning_rate_decay, multihead_attention, \
+    average_gradients, shift_right, split_tensor, embedding, residual
 
 
 class Model(object):
@@ -24,7 +21,8 @@ class Model(object):
         # Select devices according to is_training flag.
         devices = self.config.train.devices if is_training else self.config.test.devices
         self.devices = ['/gpu:'+i.strip() for i in devices.split(',') if i] or ['/cpu:0']
-
+        # If we have multiple devices (typically GPUs), we set /cpu:0 as the sync device.
+        self._sync_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
         if is_training:
             with self.graph.as_default():
                 # Optimizer.
@@ -43,10 +41,7 @@ class Model(object):
                     self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
             # Uniform scaling initializer.
-            self._initializer = init_ops.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
-
-            # If we have multiple devices (typically GPUs), we set /cpu:0 as the caching device.
-            self._sync_device = self.devices[0] if len(self.devices) == 1 else '/cpu:0'
+            self._initializer = tf.variance_scaling_initializer(scale=1, mode='fan_avg', distribution='uniform')
 
         self._prepared = True
 
@@ -98,7 +93,7 @@ class Model(object):
             self.summary_op = tf.summary.merge_all()
 
     def build_test_model(self):
-        """Build model for testing."""
+        """Build model for inference."""
 
         self.prepare(is_training=False)
 
@@ -108,84 +103,30 @@ class Model(object):
             self.decoder_input = shift_right(self.dst_pl)
             Xs = split_tensor(self.src_pl, len(self.devices))
             Ys = split_tensor(self.dst_pl, len(self.devices))
-            dec_inputs = split_tensor(self.decoder_input, len(self.devices))
+            decoder_inputs = split_tensor(self.decoder_input, len(self.devices))
 
-            # Encode
-            encoder_output_list = []
-            for i, (X, device) in enumerate(zip(Xs, self.devices)):
+            prediction_list = []
+            loss_sum=0
+            for i, (X, Y, decoder_input, device) in enumerate(zip(Xs, Ys, decoder_inputs, self.devices)):
                 with tf.device(device):
                     encoder_output = self.encoder(X, reuse=i > 0 or None)
-                    encoder_output_list.append(encoder_output)
-            self.encoder_output = tf.concat(encoder_output_list, axis=0)
-
-            # Decode
-            enc_outputs = split_tensor(self.encoder_output, len(self.devices))
-            preds_list, k_preds_list, k_scores_list = [], [], []
-            self.loss_sum = 0.0
-            for i, (X, enc_output, dec_input, Y, device) in enumerate(zip(Xs, enc_outputs, dec_inputs, Ys, self.devices)):
-                with tf.device(device):
-                    self._logger.info('Build model on %s.' % device)
-                    decoder_output = self.decoder(dec_input, enc_output, reuse=i > 0 or None)
-                    # Predictions
-                    preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
-                    preds_list.append(preds)
-                    k_preds_list.append(k_preds)
-                    k_scores_list.append(k_scores)
-                    # Loss
+                    prediction = self.beam_search(encoder_output, reuse=i > 0 or None)
+                    decoder_output = self.decoder(decoder_input, encoder_output, reuse=True)
                     loss = self.test_loss(decoder_output, Y, reuse=True)
-                    self.loss_sum += loss
+                    loss_sum += loss
+                    prediction_list.append(prediction)
 
-            self.preds = tf.concat(preds_list, axis=0)
-            self.k_preds = tf.concat(k_preds_list, axis=0)
-            self.k_scores = tf.concat(k_scores_list, axis=0)
+            max_length = tf.reduce_max([tf.shape(pred)[1] for pred in prediction_list])
 
-    def build_test_model_with_caching(self):
-        """Build model for progressive testing."""
+            def pad_to_max_length(input, length):
+                """Pad the input (with rank 2) with 3(</S>) to the given length in the second axis."""
+                shape = tf.shape(input)
+                padding = tf.ones([shape[0], length - shape[1]], dtype=INT_TYPE) * 3
+                return tf.concat([input, padding], axis=1)
 
-        self.prepare(is_training=False)
-
-        with self.graph.as_default():
-            self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-            self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
-            self.decoder_input = shift_right(self.dst_pl)
-            Xs = split_tensor(self.src_pl, len(self.devices))
-            Ys = split_tensor(self.dst_pl, len(self.devices))
-            dec_inputs = split_tensor(self.decoder_input, len(self.devices))
-
-            # Encode
-            encoder_output_list = []
-            for i, (X, device) in enumerate(zip(Xs, self.devices)):
-                with tf.device(device):
-                    encoder_output = self.encoder(X, reuse=i > 0 or None)
-                    encoder_output_list.append(encoder_output)
-            self.encoder_output = tf.concat(encoder_output_list, axis=0)
-
-            # Decode
-            enc_outputs = split_tensor(self.encoder_output, len(self.devices))
-            preds_list, k_preds_list, k_scores_list, decoder_cache_list = [], [], [], []
-            self.loss_sum = 0.0
-            self.decoder_cache_pl = tf.placeholder(dtype=FLOAT_TYPE, shape=[None, None, None, None], name='decoder_cache_pl')
-            decoder_caches = split_tensor(self.decoder_cache_pl, len(self.devices))
-            for i, (X, enc_output, dec_cache, dec_input, Y, device) in enumerate(zip(Xs, enc_outputs, decoder_caches,
-                                                                                     dec_inputs, Ys, self.devices)):
-                with tf.device(device):
-                    self._logger.info('Build model on %s.' % device)
-                    # Predictions
-                    decoder_output, decoder_cache = self.decoder_with_caching(dec_input, dec_cache, enc_output, reuse=i > 0 or None)
-                    preds, k_preds, k_scores = self.test_output(decoder_output, reuse=i > 0 or None)
-                    decoder_cache_list.append(decoder_cache)
-                    preds_list.append(preds)
-                    k_preds_list.append(k_preds)
-                    k_scores_list.append(k_scores)
-                    # Loss
-                    decoder_output = self.decoder(dec_input, enc_output, reuse=True)
-                    loss = self.test_loss(decoder_output, Y, reuse=True)
-                    self.loss_sum += loss
-
-            self.decoder_cache = tf.concat(decoder_cache_list, axis=0)
-            self.preds = tf.concat(preds_list, axis=0)
-            self.k_preds = tf.concat(k_preds_list, axis=0)
-            self.k_scores = tf.concat(k_scores_list, axis=0)
+            prediction_list = [pad_to_max_length(pred, max_length) for pred in prediction_list]
+            self.prediction = tf.concat(prediction_list, axis=0)
+            self.loss_sum = loss_sum
 
     def encoder(self, encoder_input, reuse):
         """Transformer encoder."""
@@ -378,8 +319,121 @@ class Model(object):
 
             return decoder_output, new_cache
 
+    def beam_search(self, encoder_output, reuse):
+        """Beam search in graph."""
+        beam_size, batch_size = self.config.test.beam_size, tf.shape(encoder_output)[0]
+        inf = 1e10
+
+        def get_bias_scores(scores, bias):
+            """
+            If a sequence is finished, we only allow one alive branch. This function aims to give one branch a zero score
+            and the rest -inf score.
+            Args:
+                scores: A real value array with shape [batch_size * beam_size, beam_size].
+                bias: A bool array with shape [batch_size * beam_size].
+
+            Returns:
+                A real value array with shape [batch_size * beam_size, beam_size].
+            """
+            bias = tf.to_float(bias)
+            b = tf.constant([0.0] + [-inf] * (beam_size - 1))
+            b = tf.tile(b[None,:], multiples=[batch_size * beam_size, 1])
+            return scores * (1 - bias[:, None]) + b * bias[:, None]
+
+        def get_bias_preds(preds, bias):
+            """
+            If a sequence is finished, all of its branch should be </S> (3).
+            Args:
+                preds: A int array with shape [batch_size * beam_size, beam_size].
+                bias: A bool array with shape [batch_size * beam_size].
+
+            Returns:
+                A int array with shape [batch_size * beam_size].
+            """
+            bias = tf.to_int32(bias)
+            return preds * (1 - bias[:, None]) + bias[:, None] * 3
+
+        # Prepare beam search inputs.
+        # [batch_size, 1, *, hidden_units]
+        encoder_output = encoder_output[:, None, :, :]
+        # shape: [batch_size, beam_size, *, hidden_units]
+        encoder_output = tf.tile(encoder_output, multiples=[1, beam_size, 1, 1])
+        encoder_output = tf.reshape(encoder_output, [batch_size * beam_size, -1, encoder_output.get_shape()[-1].value])
+        # [[<S>, <S>, ..., <S>]], shape: [batch_size * beam_size, 1]
+        preds = tf.ones([batch_size * beam_size, 1], dtype=INT_TYPE) * 2
+        scores = tf.constant([0.0] + [-inf] * (beam_size - 1), dtype=FLOAT_TYPE)  # [beam_size]
+        scores = tf.tile(scores, multiples=[batch_size])   # [batch_size * beam_size]
+        bias = tf.zeros_like(scores, dtype=tf.bool)
+        cache = tf.zeros([batch_size * beam_size, 0, self.config.num_blocks, self.config.hidden_units])
+
+        def step(i, bias, preds, scores, cache):
+            # Where are we.
+            i += 1
+
+            # Call decoder and get predictions.
+            decoder_output, cache = self.decoder_with_caching(preds, cache, encoder_output, reuse=reuse)
+            last_preds, last_k_preds, last_k_scores = self.test_output(decoder_output, reuse=reuse)
+
+            last_k_preds = get_bias_preds(last_k_preds, bias)
+            last_k_scores = get_bias_scores(last_k_scores, bias)
+
+            # Update scores.
+            scores = scores[:, None] + last_k_scores  # [batch_size * beam_size, beam_size]
+            scores = tf.reshape(scores, shape=[batch_size, beam_size ** 2])  # [batch_size, beam_size * beam_size]
+
+            # Pruning.
+            scores, k_indices = tf.nn.top_k(scores, k=beam_size)
+            scores = tf.reshape(scores, shape=[-1])  # [batch_size * beam_size]
+            base_indices = tf.reshape(tf.tile(tf.range(batch_size)[:, None], multiples=[1, beam_size]), shape=[-1])
+            base_indices *= beam_size ** 2
+            k_indices = base_indices + tf.reshape(k_indices, shape=[-1])  # [batch_size * beam_size]
+
+            # Update predictions.
+            last_k_preds = tf.gather(tf.reshape(last_k_preds, shape=[-1]), indices=k_indices)
+            preds = tf.gather(preds, indices=k_indices/beam_size)
+            cache = tf.gather(cache, indices=k_indices/beam_size)
+            preds = tf.concat((preds, last_k_preds[:, None]), axis=1)  # [batch_size * beam_size, i]
+
+            # Whether sequences finished.
+            bias = tf.equal(preds[:, -1], 3)  # </S>?
+
+            return i, bias, preds, scores, cache
+
+        def not_finished(i, bias, preds, scores, cache):
+            return tf.logical_and(
+                tf.reduce_any(tf.logical_not(bias)),
+                tf.less_equal(
+                    i,
+                    tf.reduce_min([tf.shape(encoder_output)[1] + 50, self.config.test.max_target_length])
+                )
+            )
+
+        i, bias, preds, scores, cache = tf.while_loop(cond=not_finished,
+                                                      body=step,
+                                                      loop_vars=[0, bias, preds, scores, cache],
+                                                      shape_invariants=[
+                                                          tf.TensorShape([]),
+                                                          tf.TensorShape([None]),
+                                                          tf.TensorShape([None, None]),
+                                                          tf.TensorShape([None]),
+                                                          tf.TensorShape([None, None, None, None])],
+                                                      back_prop=False)
+
+        scores = tf.reshape(scores, shape=[batch_size, beam_size])
+        preds = tf.reshape(preds, shape=[batch_size, beam_size, -1])  # [batch_size, beam_size, max_length]
+        lengths = tf.reduce_sum(tf.to_float(tf.not_equal(preds, 3)), axis=-1)   # [batch_size, beam_size]
+        lp = tf.pow((5 + lengths) / (5 + 1), self.config.test.lp_alpha)   # Length penalty
+        scores /= lp                                                     # following GNMT
+        max_indices = tf.to_int32(tf.argmax(scores, axis=-1))   # [batch_size]
+        max_indices += tf.range(batch_size) * beam_size
+        preds = tf.reshape(preds, shape=[batch_size * beam_size, -1])
+
+        final_preds = tf.gather(preds, indices=max_indices)
+        final_preds = final_preds[:, 1:]  # remove <S> flag
+        return final_preds
+
     def test_output(self, decoder_output, reuse):
-        """During test, we only need the last prediction."""
+        """During test, we only need the last prediction at each time."""
         with tf.variable_scope("output", reuse=reuse):
             last_logits = tf.layers.dense(decoder_output[:,-1], self.config.dst_vocab_size)
             last_preds = tf.to_int32(tf.arg_max(last_logits, dimension=-1))
@@ -389,6 +443,7 @@ class Model(object):
         return last_preds, last_k_preds, last_k_scores
 
     def test_loss(self, decoder_output, Y, reuse):
+        """This function help users to compute PPL during test."""
         with tf.variable_scope("output", reuse=reuse):
             logits = tf.layers.dense(decoder_output, self.config.dst_vocab_size)
             mask = tf.to_float(tf.not_equal(Y, 0))
@@ -412,167 +467,3 @@ class Model(object):
             mean_loss = tf.reduce_sum(loss * mask) / (tf.reduce_sum(mask))
 
         return acc, mean_loss
-
-
-def average_gradients(tower_grads):
-    """Calculate the average gradient for each shared variable across all towers.
-    Note that this function provides a synchronization point across all towers.
-    Args:
-        tower_grads: List of lists of (gradient, variable) tuples. The outer list
-        is over individual gradients. The inner list is over the gradient
-        calculation for each tower.
-    Returns:
-        List of pairs of (gradient, variable) where the gradient has been averaged
-        across all towers.
-    """
-    average_grads = []
-    for grad_and_vars in zip(*tower_grads):
-        # Note that each grad_and_vars looks like the following:
-        #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
-        grads = []
-        for g, _ in grad_and_vars:
-            # Add 0 dimension to the gradients to represent the tower.
-            expanded_g = tf.expand_dims(g, 0)
-
-            # Append on a 'tower' dimension which we will average over below.
-            grads.append(expanded_g)
-        else:
-            # Average over the 'tower' dimension.
-            grad = tf.concat(axis=0, values=grads)
-            grad = tf.reduce_mean(grad, 0)
-
-            # Keep in mind that the Variables are redundant because they are shared
-            # across towers. So .. we will just return the first tower's pointer to
-            # the Variable.
-            v = grad_and_vars[0][1]
-            grad_and_var = (grad, v)
-            average_grads.append(grad_and_var)
-    return average_grads
-
-
-def residual(inputs, outputs, dropout_rate, is_training):
-    """Residual connection.
-
-    Args:
-        inputs: A Tensor.
-        outputs: A Tensor.
-        dropout_rate: A float.
-        is_training: A bool.
-
-    Returns:
-        A Tensor.
-    """
-    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=is_training)
-    output = common_layers.layer_norm(output)
-    return output
-
-
-def split_tensor(input, n):
-    """
-    Split the tensor input to n tensors.
-    Args:
-        inputs: A tensor with size [b, ...].
-        n: A integer.
-
-    Returns: A tensor list, each tensor has size [b/n, ...].
-    """
-    batch_size = tf.shape(input)[0]
-    ls = tf.cast(tf.lin_space(0.0, tf.cast(batch_size, FLOAT_TYPE), n + 1), INT_TYPE)
-    return [input[ls[i]:ls[i+1]] for i in range(n)]
-
-
-def learning_rate_decay(config, global_step):
-    """Inverse-decay learning rate until warmup_steps, then decay."""
-    warmup_steps = tf.to_float(config.train.learning_rate_warmup_steps)
-    global_step = tf.to_float(global_step)
-    return config.hidden_units ** -0.5 * tf.minimum(
-        (global_step + 1.0) * warmup_steps ** -1.5, (global_step + 1.0) ** -0.5)
-
-
-def shift_right(input, pad=2):
-    """Shift input tensor right to create decoder input. '2' denotes <S>"""
-    return tf.concat((tf.ones_like(input[:, :1]) * pad, input[:, :-1]), 1)
-
-
-def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
-    """Embed x of type int64 into dense vectors."""
-    with tf.variable_scope(
-        name, default_name="embedding", values=[x], reuse=reuse):
-        embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
-        emb_x = tf.gather(embedding_var, x)
-        if multiplier != 1.0:
-            emb_x *= multiplier
-        return emb_x
-
-
-def multihead_attention(query_antecedent,
-                        memory_antecedent,
-                        bias,
-                        total_key_depth,
-                        total_value_depth,
-                        output_depth,
-                        num_heads,
-                        dropout_rate,
-                        reserve_last=False,
-                        summaries=False,
-                        image_shapes=None,
-                        name=None):
-    """Multihead scaled-dot-product attention with input/output transformations.
-
-    Args:
-    query_antecedent: a Tensor with shape [batch, length_q, channels]
-    memory_antecedent: a Tensor with shape [batch, length_m, channels]
-    bias: bias Tensor (see attention_bias())
-    total_key_depth: an integer
-    total_value_depth: an integer
-    output_depth: an integer
-    num_heads: an integer dividing total_key_depth and total_value_depth
-    dropout_rate: a floating point number
-    reserve_last: a boolean
-    summaries: a boolean
-    image_shapes: optional quadruple of integer scalars for image summary.
-        If the query positions and memory positions represent the
-        pixels of a flattened image, then pass in their dimensions:
-          (query_rows, query_cols, memory_rows, memory_cols).
-    name: an optional string
-
-    Returns:
-    A Tensor.
-    """
-    with tf.variable_scope(
-        name,
-        default_name="multihead_attention",
-        values=[query_antecedent, memory_antecedent]):
-        if memory_antecedent is None:
-            # self attention
-            combined = common_layers.conv1d(
-              query_antecedent,
-              total_key_depth * 2 + total_value_depth,
-              1,
-              name="qkv_transform")
-            q, k, v = tf.split(
-              combined, [total_key_depth, total_key_depth, total_value_depth],
-              axis=2)
-        else:
-            q = common_layers.conv1d(
-              query_antecedent, total_key_depth, 1, name="q_transform")
-            combined = common_layers.conv1d(
-              memory_antecedent,
-              total_key_depth + total_value_depth,
-              1,
-              name="kv_transform")
-            k, v = tf.split(combined, [total_key_depth, total_value_depth], axis=2)
-
-        if reserve_last:
-            q = q[:, -1:, :]
-
-        q = common_attention.split_heads(q, num_heads)
-        k = common_attention.split_heads(k, num_heads)
-        v = common_attention.split_heads(v, num_heads)
-        key_depth_per_head = total_key_depth // num_heads
-        q *= key_depth_per_head**-0.5
-        x = common_attention.dot_product_attention(
-            q, k, v, bias, dropout_rate, summaries, image_shapes)
-        x = common_attention.combine_heads(x)
-        x = common_layers.conv1d(x, output_depth, 1, name="output_transform")
-        return x
