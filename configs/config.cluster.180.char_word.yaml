@@ -1,7 +1,7 @@
 ---
-src_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn_vocab.40000'
-dst_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/eng_vocab.40000'
-src_vocab_size: 40000
+src_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn_char_vocab.5000'
+dst_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/eng_char_vocab.40000'
+src_vocab_size: 5000
 dst_vocab_size: 40000
 hidden_units: 512
 scale_embedding: True
@@ -11,12 +11,12 @@ num_blocks: 6
 num_heads: 8
 train:
     devices: '0,1,2,3,4,5,6,7'
-    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn.txt'
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn.char.txt'
     dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/180/eng.txt'
     tokens_per_batch: 25000
     max_length: 125
     num_epochs: 500
-    logdir: 'model-180-base'
+    logdir: 'model-180-char'
     save_freq: 1000
     summary_freq: 100
     grads_clip: 5
@@ -25,9 +25,9 @@ train:
     learning_rate_warmup_steps: 4000
     label_smoothing: 0.1
 test:
-    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.seg_u8'
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/02.char'
     ori_dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/nist02tkref'
-    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/180.base.output'
+    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/180.char_word.output'
 
 #    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/IWSLT07/IWSLT07.cws.bpe.end'
 #    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/IWSLT07/nmt.output'
@@ -39,4 +39,4 @@ test:
     max_target_length: 200
     lp_alpha: 0.6
     beam_size: 4
-    devices: '0,1,2,3,4'
+    devices: '0,1,2,3,4,5,6,7'

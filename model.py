@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.python.ops import init_ops
 import logging
 
 import tensor2tensor.common_attention as common_attention
@@ -41,7 +42,7 @@ class Model(object):
                     self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
             # Uniform scaling initializer.
-            self._initializer = tf.uniform_unit_scaling_initializer()
+            self._initializer = init_ops.variance_scaling_initializer(scale=1.0, mode='fan_avg', distribution='uniform')
 
         self._prepared = True
 
