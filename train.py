@@ -7,7 +7,8 @@ from argparse import ArgumentParser
 import tensorflow as tf
 
 from utils import DataUtil, AttrDict
-from model import Model
+from model import Transformer
+from evaluate import Evaluator
 
 
 def train(config):
@@ -15,50 +16,63 @@ def train(config):
 
     """Train a model with a config file."""
     du = DataUtil(config=config)
-    model = Model(config=config)
+    model = Transformer(config=config, devices=config.train.devices)
     model.build_train_model()
 
     sess_config = tf.ConfigProto()
     sess_config.gpu_options.allow_growth = True
     sess_config.allow_soft_placement = True
-    with model.graph.as_default():
-        saver = tf.train.Saver(var_list=tf.global_variables())
-        summary_writer = tf.summary.FileWriter(config.train.logdir, graph=model.graph)
-        # saver_partial = tf.train.Saver(var_list=[v for v in tf.trainable_variables() if 'Adam' not in v.name])
 
-        with tf.Session(config=sess_config) as sess:
-            try:
-                saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
-            except:
-                # Initialize all variables.
-                sess.run(tf.global_variables_initializer())
-                logger.info('Failed to reload model.')
-            for epoch in range(1, config.train.num_epochs+1):
-                for batch in du.get_training_batches_with_buckets():
-                    start_time = time.time()
-                    step = sess.run(model.global_step)
-                    # Summary
-                    if step % config.train.summary_freq == 0:
-                        step, lr, gnorm, loss, acc, summary, _ = sess.run(
-                            [model.global_step, model.learning_rate, model.grads_norm,
-                             model.loss, model.acc, model.summary_op, model.train_op],
-                            feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
-                        summary_writer.add_summary(summary, global_step=step)
-                    else:
-                        step, lr, gnorm, loss, acc, _ = sess.run(
-                            [model.global_step, model.learning_rate, model.grads_norm,
-                             model.loss, model.acc, model.train_op],
-                            feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
-                    logger.info(
-                        'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
-                        format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
+    summary_writer = tf.summary.FileWriter(config.train.logdir, graph=model.graph)
 
-                    # Save model
-                    if step % config.train.save_freq == 0:
+    with tf.Session(config=sess_config, graph=model.graph) as sess:
+        try:
+            model.saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
+        except:
+            # Initialize all variables.
+            sess.run(tf.global_variables_initializer())
+            logger.info('Failed to reload model.')
+
+        evaluator = Evaluator()
+        evaluator.init_from_existed(model, sess, du)
+
+        dev_bleu = evaluator.evaluate(**config.dev)
+        toleration = config.train.toleration
+        for epoch in range(1, config.train.num_epochs+1):
+            for batch in du.get_training_batches_with_buckets():
+                start_time = time.time()
+                step = sess.run(model.global_step)
+                # Summary
+                if step % config.train.summary_freq == 0:
+                    step, lr, gnorm, loss, acc, summary, _ = sess.run(
+                        [model.global_step, model.learning_rate, model.grads_norm,
+                         model.loss, model.accuracy, model.summary_op, model.train_op],
+                        feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
+                    summary_writer.add_summary(summary, global_step=step)
+                else:
+                    step, lr, gnorm, loss, acc, _ = sess.run(
+                        [model.global_step, model.learning_rate, model.grads_norm,
+                         model.loss, model.accuracy, model.train_op],
+                        feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
+                logger.info(
+                    'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
+                    format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
+
+                # Save model
+                if step % config.train.save_freq == 0:
+                    new_dev_bleu = evaluator.evaluate(**config.dev)
+                    if new_dev_bleu >= dev_bleu:
                         mp = config.train.logdir + '/model_epoch_%d_step_%d' % (epoch, step)
-                        saver.save(sess, mp)
+                        model.saver.save(sess, mp)
                         logger.info('Save model in %s.' % mp)
-            logger.info("Finish training.")
+                        toleration = config.train.toleration
+                    else:
+                        toleration -= 1
+                        if toleration <= 0:
+                            break
+            else:
+                break
+        logger.info("Finish training.")
 
 
 if __name__ == '__main__':

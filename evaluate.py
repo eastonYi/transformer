@@ -6,6 +6,7 @@ import numpy as np
 import yaml
 import time
 import logging
+import commands
 from tempfile import mkstemp
 from argparse import ArgumentParser
 
@@ -17,28 +18,28 @@ class Evaluator(object):
     """
     Evaluate the model.
     """
-    def __init__(self, config):
-        self.config = config
+    def __init__(self):
+        pass
 
-        # Load model
+    def init_from_config(self, config):
         # self.model = Model(config)
-        self.model = Transformer(config)
+        self.model = Transformer(config, config.test.devices)
         self.model.build_test_model()
 
-        self.du = DataUtil(config)
-
-        # Create session
         sess_config = tf.ConfigProto()
         sess_config.gpu_options.allow_growth = True
         sess_config.allow_soft_placement = True
         self.sess = tf.Session(config=sess_config, graph=self.model.graph)
         # Restore model.
-        with self.model.graph.as_default():
-            saver = tf.train.Saver(tf.global_variables())
-        saver.restore(self.sess, tf.train.latest_checkpoint(config.train.logdir))
+        self.model.saver.restore(self.sess, tf.train.latest_checkpoint(config.train.logdir))
 
-    def __del__(self):
-        self.sess.close()
+        self.du = DataUtil(config)
+
+    def init_from_existed(self, model, sess, du):
+        assert model.graph == sess.graph
+        self.sess = sess
+        self.model = model
+        self.du = du
 
     def beam_search(self, X):
         return self.sess.run(self.model.prediction, feed_dict={self.model.src_pl: X})
@@ -46,14 +47,14 @@ class Evaluator(object):
     def loss(self, X, Y):
         return self.sess.run(self.model.loss_sum, feed_dict={self.model.src_pl: X, self.model.dst_pl: Y})
 
-    def translate(self):
-        logging.info('Translate %s.' % self.config.test.src_path)
+    def translate(self, src_path, output_path, batch_size):
+        logging.info('Translate %s.' % src_path)
         _, tmp = mkstemp()
         fd = codecs.open(tmp, 'w', 'utf8')
         count = 0
         token_count = 0
         start = time.time()
-        for X in self.du.get_test_batches():
+        for X in self.du.get_test_batches(src_path, batch_size):
             Y = self.beam_search(X)
             sents = self.du.indices_to_words(Y)
             for sent in sents:
@@ -65,33 +66,37 @@ class Evaluator(object):
                          format(count, token_count, time_span / 60, time_span / token_count))
         fd.close()
         # Remove BPE flag, if have.
-        os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, self.config.test.output_path))
+        os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, output_path))
         os.remove(tmp)
-        logging.info('The result file was saved in %s.' % self.config.test.output_path)
+        logging.info('The result file was saved in %s.' % output_path)
 
-    def ppl(self):
-        if 'dst_path' not in self.config.test:
-            logging.warning("Skip PPL calculation due to missing of parameter 'dst_path' in config file.")
-            return
-        logging.info('Calculate PPL for %s and %s.' % (self.config.test.src_path, self.config.test.dst_path))
+    def ppl(self, src_path, dst_path, batch_size):
+        logging.info('Calculate PPL for %s and %s.' % (src_path, dst_path))
         token_count = 0
         loss_sum = 0
-        for batch in self.du.get_test_batches_with_target():
+        for batch in self.du.get_test_batches_with_target(src_path, dst_path, batch_size):
             X, Y = batch
             loss_sum += self.loss(X, Y)
             token_count += np.sum(np.greater(Y, 0))
         # Compute PPL
-        logging.info('PPL: %.4f' % np.exp(loss_sum / token_count))
+        ppl = np.exp(loss_sum / token_count)
+        logging.info('PPL: %.4f' % ppl)
+        return ppl
 
-    def evaluate(self):
-        self.translate()
-        if 'cmd' in self.config.test:
-            cmd = self.config.test.cmd
-        else:
-            cmd = 'perl multi-bleu.perl {ref} < {output}'
-        # Call the script to evaluate.
-        os.system(cmd.format(**{'ref': self.config.test.ori_dst_path, 'output': self.config.test.output_path}))
-        self.ppl()
+    def evaluate(self, **kargs):
+        """Evaluate the model on dev set."""
+        src_path = kargs['src_path']
+        ref_path = kargs['ref_path']
+        output_path = kargs['output_path']
+        batch_size = kargs['batch_size']
+        cmd = kargs['cmd'] if 'cmd' in kargs else 'perl multi-bleu.perl {ref} < {output}'
+        self.translate(src_path, output_path, batch_size)
+        bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
+        logging.info('BLEU: {}'.format(bleu))
+        if 'dst_path' in kargs:
+            self.ppl(src_path, kargs['dst_path'], batch_size)
+
+        return float(bleu)
 
 
 if __name__ == '__main__':
@@ -102,6 +107,7 @@ if __name__ == '__main__':
     config = AttrDict(yaml.load(open(args.config)))
     # Logger
     logging.basicConfig(level=logging.INFO)
-    evaluator = Evaluator(config)
-    evaluator.evaluate()
+    evaluator = Evaluator()
+    evaluator.init_from_config(config)
+    evaluator.evaluate(**config.test)
     logging.info("Done")

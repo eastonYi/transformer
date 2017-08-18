@@ -197,11 +197,8 @@ class DataUtil(object):
 
         return [ff + '.{}.shuf'.format(os.getpid()) for ff in list_of_files]
 
-    def get_test_batches(self):
-        src_path = self.config.test.src_path
-        batch_size = self.config.test.batch_size
-
-        # Read batches from test files.
+    def get_test_batches(self, src_path, batch_size):
+        # Read batches for testing.
         src_sents = []
         for src_sent in open(src_path, 'r'):
             src_sent = src_sent.decode('utf8')
@@ -214,17 +211,13 @@ class DataUtil(object):
         if src_sents:
             yield self.create_batch(src_sents, o='src')
 
-    def get_test_batches_with_target(self):
+    def get_test_batches_with_target(self, src_path, dst_path, batch_size):
         """
         Usually we don't need target sentences for test unless we want to compute PPl.
         Returns:
             Paired source and target batches.
         """
-        src_path = self.config.test.src_path
-        dst_path = self.config.test.dst_path
-        batch_size = self.config.test.batch_size
 
-        # Read batches from test files.
         src_sents, dst_sents = [], []
         for src_sent, dst_sent in izip(open(src_path, 'r'), open(dst_path, 'r')):
             src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
@@ -307,19 +300,18 @@ def average_gradients(tower_grads):
     return average_grads
 
 
-def residual(inputs, outputs, dropout_rate, is_training):
+def residual(inputs, outputs, dropout_rate):
     """Residual connection.
 
     Args:
         inputs: A Tensor.
         outputs: A Tensor.
         dropout_rate: A float.
-        is_training: A bool.
 
     Returns:
         A Tensor.
     """
-    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=is_training)
+    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate)
     output = common_layers.layer_norm(output)
     return output
 
@@ -400,6 +392,7 @@ def multihead_attention(query_antecedent,
         name,
         default_name="multihead_attention",
         values=[query_antecedent, memory_antecedent]):
+
         if memory_antecedent is None:
             # self attention
             combined = common_layers.conv1d(

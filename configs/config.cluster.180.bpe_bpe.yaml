@@ -28,7 +28,7 @@ test:
     src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.bpe'
     ori_dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.ref'
     output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/180.bpe_bpe.output'
-    cmd: 'sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep "BLEU score ="'
+    cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
 
 #    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/IWSLT07/IWSLT07.seg_u8'
 #    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/IWSLT07/180.bpe_bpe.output'
@@ -41,3 +41,10 @@ test:
     lp_alpha: 0.6
     beam_size: 4
     devices: '0,1,2,3,4,5,6,7'
+
+dev:
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.bpe'
+    ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.ref'
+    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/180.bpe_bpe.output'
+    cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+    batch_size: 256
