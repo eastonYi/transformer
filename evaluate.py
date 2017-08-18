@@ -9,7 +9,7 @@ import logging
 from tempfile import mkstemp
 from argparse import ArgumentParser
 
-from model import Model
+from model import Transformer
 from utils import DataUtil, AttrDict
 
 
@@ -21,7 +21,8 @@ class Evaluator(object):
         self.config = config
 
         # Load model
-        self.model = Model(config)
+        # self.model = Model(config)
+        self.model = Transformer(config)
         self.model.build_test_model()
 
         self.du = DataUtil(config)
@@ -84,16 +85,12 @@ class Evaluator(object):
 
     def evaluate(self):
         self.translate()
-        if 'eval_script' in self.config.test:
-            script_path = self.config.test.eval_script
+        if 'cmd' in self.config.test:
+            cmd = self.config.test.cmd
         else:
-            script_path = 'multi-bleu.perl'
-        script_interpreter = script_path.rsplit('.', 1)[1]
-        script_dir = os.path.dirname(script_path) or '.'
-        os.chdir(script_dir)
-        # Call a script to evaluate.
-        os.system("%s %s %s < %s" % (script_interpreter, script_path, self.config.test.ori_dst_path,
-                                     self.config.test.output_path))
+            cmd = 'perl multi-bleu.perl {ref} < {output}'
+        # Call the script to evaluate.
+        os.system(cmd.format(**{'ref': self.config.test.ori_dst_path, 'output': self.config.test.output_path}))
         self.ppl()
 
 

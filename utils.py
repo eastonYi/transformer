@@ -31,6 +31,7 @@ class DataUtil(object):
     """
     Util class for creating batches for training and testing.
     """
+
     def __init__(self, config):
         self.config = config
         self._logger = logging.getLogger('util')

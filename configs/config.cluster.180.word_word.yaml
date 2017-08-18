@@ -25,9 +25,10 @@ train:
     learning_rate_warmup_steps: 4000
     label_smoothing: 0.1
 test:
-    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.seg_u8'
-    ori_dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/nist02tkref'
-    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/nist02/180.word_word.output'
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.bpe'
+    ori_dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.ref'
+    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/180.bpe_word.output'
+    cmd: 'sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep "BLEU score ="'
 
 #    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/IWSLT07/IWSLT07.cws.bpe.end'
 #    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/IWSLT07/nmt.output'

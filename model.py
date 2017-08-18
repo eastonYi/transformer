@@ -29,16 +29,19 @@ class Model(object):
                 # Optimizer.
                 self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
                                                    trainable=False, initializer=tf.zeros_initializer)
-                self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
+
                 if self.config.train.optimizer == 'adam':
+                    self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
                     self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                 elif self.config.train.optimizer == 'adam_decay':
                     self.learning_rate = learning_rate_decay(self.config, self.global_step)
                     self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                                                             beta1=0.9, beta2=0.98, epsilon=1e-9)
                 elif self.config.train.optimizer == 'sgd':
+                    self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
                     self.optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
                 elif self.config.train.optimizer == 'mom':
+                    self.learning_rate = tf.convert_to_tensor(self.config.train.learning_rate)
                     self.optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
             # Uniform scaling initializer.
@@ -56,7 +59,7 @@ class Model(object):
             return device
 
         with self.graph.as_default(), tf.device(self._sync_device), \
-             tf.variable_scope(tf.get_variable_scope(), initializer=self._initializer):
+            tf.variable_scope(tf.get_variable_scope(), initializer=self._initializer):
             self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
             self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
             Xs = split_tensor(self.src_pl, len(self.devices))
@@ -109,7 +112,7 @@ class Model(object):
             for i, (X, Y, decoder_input, device) in enumerate(zip(Xs, Ys, decoder_inputs, self.devices)):
                 with tf.device(device):
 
-                    # Avoid errors occurred when the input is empty by a condition phrase.
+                    # Avoid errors caused by empty input by a condition phrase.
                     def true_fn():
                         encoder_output = self.encoder(X, reuse=i > 0 or None)
                         prediction = self.beam_search(encoder_output, reuse=i > 0 or None)
@@ -138,195 +141,19 @@ class Model(object):
             self.loss_sum = loss_sum
 
     def encoder(self, encoder_input, reuse):
-        """Transformer encoder."""
+        """Encoder."""
         with tf.variable_scope("encoder", reuse=reuse):
-            # Mask
-            encoder_padding = tf.equal(encoder_input, 0)
-            # Embedding
-            encoder_output = embedding(encoder_input,
-                                       vocab_size=self.config.src_vocab_size,
-                                       dense_size=self.config.hidden_units,
-                                       multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
-                                       name="src_embedding")
-            # Add positional signal
-            encoder_output = common_attention.add_timing_signal_1d(encoder_output)
-            # Dropout
-            encoder_output = tf.layers.dropout(encoder_output,
-                                               rate=self.config.residual_dropout_rate,
-                                               training=self.is_training)
-
-            # Blocks
-            for i in range(self.config.num_blocks):
-                with tf.variable_scope("block_{}".format(i)):
-                    # Multihead Attention
-                    encoder_output = residual(encoder_output,
-                                              common_attention.multihead_attention(
-                                                  query_antecedent=encoder_output,
-                                                  memory_antecedent=None,
-                                                  bias=common_attention.attention_bias_ignore_padding(encoder_padding),
-                                                  total_key_depth=self.config.hidden_units,
-                                                  total_value_depth=self.config.hidden_units,
-                                                  output_depth=self.config.hidden_units,
-                                                  num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
-                                                  name='encoder_self_attention',
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    # Feed Forward
-                    encoder_output = residual(encoder_output,
-                                              common_attention.common_layers.conv_hidden_relu(
-                                                  inputs=encoder_output,
-                                                  hidden_size=4 * self.config.hidden_units,
-                                                  output_size=self.config.hidden_units,
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-        # Mask padding part to zeros.
-        encoder_output *= tf.expand_dims(1.0 - tf.to_float(encoder_padding), axis=-1)
-        return encoder_output
+            return self.encoder_body(encoder_input)
 
     def decoder(self, decoder_input, encoder_output, reuse):
-        """Transformer decoder"""
+        """Decoder"""
         with tf.variable_scope("decoder", reuse=reuse):
-            encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
-            encoder_attention_bias = common_attention.attention_bias_ignore_padding(encoder_padding)
-
-            decoder_output = embedding(decoder_input,
-                                       vocab_size=self.config.dst_vocab_size,
-                                       dense_size=self.config.hidden_units,
-                                       multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
-                                       name="dst_embedding")
-            # Positional Encoding
-            decoder_output += common_attention.add_timing_signal_1d(decoder_output)
-            # Dropout
-            decoder_output = tf.layers.dropout(decoder_output,
-                                               rate=self.config.residual_dropout_rate,
-                                               training=self.is_training)
-            # Bias for preventing peeping later information
-            self_attention_bias = common_attention.attention_bias_lower_triangle(tf.shape(decoder_input)[1])
-
-            # Blocks
-            for i in range(self.config.num_blocks):
-                with tf.variable_scope("block_{}".format(i)):
-                    # Multihead Attention (self-attention)
-                    decoder_output = residual(decoder_output,
-                                              common_attention.multihead_attention(
-                                                  query_antecedent=decoder_output,
-                                                  memory_antecedent=None,
-                                                  bias=self_attention_bias,
-                                                  total_key_depth=self.config.hidden_units,
-                                                  total_value_depth=self.config.hidden_units,
-                                                  num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
-                                                  output_depth=self.config.hidden_units,
-                                                  name="decoder_self_attention",
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    # Multihead Attention (vanilla attention)
-                    decoder_output = residual(decoder_output,
-                                              common_attention.multihead_attention(
-                                                  query_antecedent=decoder_output,
-                                                  memory_antecedent=encoder_output,
-                                                  bias=encoder_attention_bias,
-                                                  total_key_depth=self.config.hidden_units,
-                                                  total_value_depth=self.config.hidden_units,
-                                                  output_depth=self.config.hidden_units,
-                                                  num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
-                                                  name="decoder_vanilla_attention",
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    # Feed Forward
-                    decoder_output = residual(decoder_output,
-                                              common_layers.conv_hidden_relu(
-                                                  decoder_output,
-                                                  hidden_size=4 * self.config.hidden_units,
-                                                  output_size=self.config.hidden_units,
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-            return decoder_output
+            return self.decoder_body(decoder_input, encoder_output)
 
     def decoder_with_caching(self, decoder_input, decoder_cache, encoder_output, reuse):
-        """Transformer decoder"""
+        """Incremental Decoder"""
         with tf.variable_scope("decoder", reuse=reuse):
-            encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
-            encoder_attention_bias = common_attention.attention_bias_ignore_padding(encoder_padding)
-
-            decoder_output = embedding(decoder_input,
-                                       vocab_size=self.config.dst_vocab_size,
-                                       dense_size=self.config.hidden_units,
-                                       multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
-                                       name="dst_embedding")
-            # Positional Encoding
-            decoder_output += common_attention.add_timing_signal_1d(decoder_output)
-            # Dropout
-            decoder_output = tf.layers.dropout(decoder_output,
-                                               rate=self.config.residual_dropout_rate,
-                                               training=self.is_training)
-
-            new_cache = []
-
-            # Blocks
-            for i in range(self.config.num_blocks):
-                with tf.variable_scope("block_{}".format(i)):
-                    # Multihead Attention (self-attention)
-                    decoder_output = residual(decoder_output[:, -1:, :],
-                                              multihead_attention(
-                                                  query_antecedent=decoder_output,
-                                                  memory_antecedent=None,
-                                                  bias=None,
-                                                  total_key_depth=self.config.hidden_units,
-                                                  total_value_depth=self.config.hidden_units,
-                                                  num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
-                                                  reserve_last=True,
-                                                  output_depth=self.config.hidden_units,
-                                                  name="decoder_self_attention",
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    # Multihead Attention (vanilla attention)
-                    decoder_output = residual(decoder_output,
-                                              multihead_attention(
-                                                  query_antecedent=decoder_output,
-                                                  memory_antecedent=encoder_output,
-                                                  bias=encoder_attention_bias,
-                                                  total_key_depth=self.config.hidden_units,
-                                                  total_value_depth=self.config.hidden_units,
-                                                  output_depth=self.config.hidden_units,
-                                                  num_heads=self.config.num_heads,
-                                                  dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
-                                                  reserve_last=True,
-                                                  name="decoder_vanilla_attention",
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    # Feed Forward
-                    decoder_output = residual(decoder_output,
-                                              common_layers.conv_hidden_relu(
-                                                  decoder_output,
-                                                  hidden_size=4 * self.config.hidden_units,
-                                                  output_size=self.config.hidden_units,
-                                                  summaries=True),
-                                              dropout_rate=self.config.residual_dropout_rate,
-                                              is_training=self.is_training)
-
-                    decoder_output = tf.concat([decoder_cache[:, :, i, :], decoder_output], axis=1)
-                    new_cache.append(decoder_output[:, :, None, :])
-
-            new_cache = tf.concat(new_cache, axis=2)  # [batch_size, n_step, num_blocks, num_hidden]
-
-            return decoder_output, new_cache
+            return self.decoder_with_caching_body(decoder_input, decoder_cache, encoder_output)
 
     def beam_search(self, encoder_output, reuse):
         """Beam search in graph."""
@@ -365,7 +192,7 @@ class Model(object):
         # Prepare beam search inputs.
         # [batch_size, 1, *, hidden_units]
         encoder_output = encoder_output[:, None, :, :]
-        # shape: [batch_size, beam_size, *, hidden_units]
+        # [batch_size, beam_size, *, hidden_units]
         encoder_output = tf.tile(encoder_output, multiples=[1, beam_size, 1, 1])
         encoder_output = tf.reshape(encoder_output, [batch_size * beam_size, -1, encoder_output.get_shape()[-1].value])
         # [[<S>, <S>, ..., <S>]], shape: [batch_size * beam_size, 1]
@@ -476,3 +303,228 @@ class Model(object):
             mean_loss = tf.reduce_sum(loss * mask) / (tf.reduce_sum(mask))
 
         return acc, mean_loss
+
+    def encoder_body(self, encoder_input):
+        """
+        This is a interface leave to be implemented by sub classes.
+        Args:
+            encoder_input: A tensor with shape [batch_size, src_length]
+
+        Returns: A Tensor with shape [batch_size, src_length, num_hidden]
+
+        """
+        raise NotImplementedError()
+
+    def decoder_body(self, decoder_input, encoder_output):
+        """
+        This is a interface leave to be implemented by sub classes.
+        Args:
+            decoder_input: A Tensor with shape [batch_size, dst_length]
+            encoder_output: A Tensor with shape [batch_size, src_length, num_hidden]
+
+        Returns: A Tensor with shape [batch_size, dst_length, num_hidden]
+
+        """
+        raise NotImplementedError()
+
+    def decoder_with_caching_body(self, decoder_input, decoder_cache, encoder_output):
+        """
+        This is a interface leave to be implemented by sub classes.
+        Args:
+            decoder_input: A Tensor with shape [batch_size, dst_length]
+            decoder_cache: A Tensor with shape [batch_size, *, *, num_hidden]
+            encoder_output: A Tensor with shape [batch_size, src_length, num_hidden]
+
+        Returns: A Tensor with shape [batch_size, dst_length, num_hidden]
+
+        """
+        raise NotImplementedError()
+
+
+class Transformer(Model):
+    def __init__(self, config):
+        super(self.__class__, self).__init__(config)
+
+    def encoder_body(self, encoder_input):
+        # Mask
+        encoder_padding = tf.equal(encoder_input, 0)
+        # Embedding
+        encoder_output = embedding(encoder_input,
+                                   vocab_size=self.config.src_vocab_size,
+                                   dense_size=self.config.hidden_units,
+                                   multiplier=self.config.hidden_units**0.5 if self.config.scale_embedding else 1.0,
+                                   name="src_embedding")
+        # Add positional signal
+        encoder_output = common_attention.add_timing_signal_1d(encoder_output)
+        # Dropout
+        encoder_output = tf.layers.dropout(encoder_output,
+                                           rate=self.config.residual_dropout_rate,
+                                           training=self.is_training)
+
+        # Blocks
+        for i in range(self.config.num_blocks):
+            with tf.variable_scope("block_{}".format(i)):
+                # Multihead Attention
+                encoder_output = residual(encoder_output,
+                                          common_attention.multihead_attention(
+                                              query_antecedent=encoder_output,
+                                              memory_antecedent=None,
+                                              bias=common_attention.attention_bias_ignore_padding(encoder_padding),
+                                              total_key_depth=self.config.hidden_units,
+                                              total_value_depth=self.config.hidden_units,
+                                              output_depth=self.config.hidden_units,
+                                              num_heads=self.config.num_heads,
+                                              dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
+                                              name='encoder_self_attention',
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                # Feed Forward
+                encoder_output = residual(encoder_output,
+                                          common_attention.common_layers.conv_hidden_relu(
+                                              inputs=encoder_output,
+                                              hidden_size=4 * self.config.hidden_units,
+                                              output_size=self.config.hidden_units,
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+        # Mask padding part to zeros.
+        encoder_output *= tf.expand_dims(1.0 - tf.to_float(encoder_padding), axis=-1)
+        return encoder_output
+
+    def decoder_body(self, decoder_input, encoder_output):
+        encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
+        encoder_attention_bias = common_attention.attention_bias_ignore_padding(encoder_padding)
+
+        decoder_output = embedding(decoder_input,
+                                   vocab_size=self.config.dst_vocab_size,
+                                   dense_size=self.config.hidden_units,
+                                   multiplier=self.config.hidden_units ** 0.5 if self.config.scale_embedding else 1.0,
+                                   name="dst_embedding")
+        # Positional Encoding
+        decoder_output += common_attention.add_timing_signal_1d(decoder_output)
+        # Dropout
+        decoder_output = tf.layers.dropout(decoder_output,
+                                           rate=self.config.residual_dropout_rate,
+                                           training=self.is_training)
+        # Bias for preventing peeping later information
+        self_attention_bias = common_attention.attention_bias_lower_triangle(tf.shape(decoder_input)[1])
+
+        # Blocks
+        for i in range(self.config.num_blocks):
+            with tf.variable_scope("block_{}".format(i)):
+                # Multihead Attention (self-attention)
+                decoder_output = residual(decoder_output,
+                                          common_attention.multihead_attention(
+                                              query_antecedent=decoder_output,
+                                              memory_antecedent=None,
+                                              bias=self_attention_bias,
+                                              total_key_depth=self.config.hidden_units,
+                                              total_value_depth=self.config.hidden_units,
+                                              num_heads=self.config.num_heads,
+                                              dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
+                                              output_depth=self.config.hidden_units,
+                                              name="decoder_self_attention",
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                # Multihead Attention (vanilla attention)
+                decoder_output = residual(decoder_output,
+                                          common_attention.multihead_attention(
+                                              query_antecedent=decoder_output,
+                                              memory_antecedent=encoder_output,
+                                              bias=encoder_attention_bias,
+                                              total_key_depth=self.config.hidden_units,
+                                              total_value_depth=self.config.hidden_units,
+                                              output_depth=self.config.hidden_units,
+                                              num_heads=self.config.num_heads,
+                                              dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
+                                              name="decoder_vanilla_attention",
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                # Feed Forward
+                decoder_output = residual(decoder_output,
+                                          common_layers.conv_hidden_relu(
+                                              decoder_output,
+                                              hidden_size=4 * self.config.hidden_units,
+                                              output_size=self.config.hidden_units,
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+        return decoder_output
+
+    def decoder_with_caching_body(self, decoder_input, decoder_cache, encoder_output):
+        encoder_padding = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1), 0.0)
+        encoder_attention_bias = common_attention.attention_bias_ignore_padding(encoder_padding)
+
+        decoder_output = embedding(decoder_input,
+                                   vocab_size=self.config.dst_vocab_size,
+                                   dense_size=self.config.hidden_units,
+                                   multiplier=self.config.hidden_units ** 0.5 if self.config.scale_embedding else 1.0,
+                                   name="dst_embedding")
+        # Positional Encoding
+        decoder_output += common_attention.add_timing_signal_1d(decoder_output)
+        # Dropout
+        decoder_output = tf.layers.dropout(decoder_output,
+                                           rate=self.config.residual_dropout_rate,
+                                           training=self.is_training)
+
+        new_cache = []
+
+        # Blocks
+        for i in range(self.config.num_blocks):
+            with tf.variable_scope("block_{}".format(i)):
+                # Multihead Attention (self-attention)
+                decoder_output = residual(decoder_output[:, -1:, :],
+                                          multihead_attention(
+                                              query_antecedent=decoder_output,
+                                              memory_antecedent=None,
+                                              bias=None,
+                                              total_key_depth=self.config.hidden_units,
+                                              total_value_depth=self.config.hidden_units,
+                                              num_heads=self.config.num_heads,
+                                              dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
+                                              reserve_last=True,
+                                              output_depth=self.config.hidden_units,
+                                              name="decoder_self_attention",
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                # Multihead Attention (vanilla attention)
+                decoder_output = residual(decoder_output,
+                                          multihead_attention(
+                                              query_antecedent=decoder_output,
+                                              memory_antecedent=encoder_output,
+                                              bias=encoder_attention_bias,
+                                              total_key_depth=self.config.hidden_units,
+                                              total_value_depth=self.config.hidden_units,
+                                              output_depth=self.config.hidden_units,
+                                              num_heads=self.config.num_heads,
+                                              dropout_rate=self.config.attention_dropout_rate if self.is_training else 0.0,
+                                              reserve_last=True,
+                                              name="decoder_vanilla_attention",
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                # Feed Forward
+                decoder_output = residual(decoder_output,
+                                          common_layers.conv_hidden_relu(
+                                              decoder_output,
+                                              hidden_size=4 * self.config.hidden_units,
+                                              output_size=self.config.hidden_units,
+                                              summaries=True),
+                                          dropout_rate=self.config.residual_dropout_rate,
+                                          is_training=self.is_training)
+
+                decoder_output = tf.concat([decoder_cache[:, :, i, :], decoder_output], axis=1)
+                new_cache.append(decoder_output[:, :, None, :])
+
+        new_cache = tf.concat(new_cache, axis=2)  # [batch_size, n_step, num_blocks, num_hidden]
+
+        return decoder_output, new_cache
