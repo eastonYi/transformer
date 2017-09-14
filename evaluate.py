@@ -83,13 +83,13 @@ class Evaluator(object):
         logging.info('PPL: %.4f' % ppl)
         return ppl
 
-    def evaluate(self, **kargs):
+    def evaluate(self, batch_size, **kargs):
         """Evaluate the model on dev set."""
         src_path = kargs['src_path']
         ref_path = kargs['ref_path']
         output_path = kargs['output_path']
-        batch_size = kargs['batch_size']
-        cmd = kargs['cmd'] if 'cmd' in kargs else 'perl multi-bleu.perl {ref} < {output}'
+        cmd = kargs['cmd'] if 'cmd' in kargs else\
+            "perl multi-bleu.perl {ref} < {output} 2>/dev/null | awk '{{print($3)}}' | awk -F, '{{print $1}}'"
         self.translate(src_path, output_path, batch_size)
         bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
         logging.info('BLEU: {}'.format(bleu))
@@ -109,5 +109,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     evaluator = Evaluator()
     evaluator.init_from_config(config)
-    evaluator.evaluate(**config.test)
+    for attr in config.test:
+        if attr.startswith('set'):
+            evaluator.evaluate(config.test.batch_size, **config.test[attr])
     logging.info("Done")

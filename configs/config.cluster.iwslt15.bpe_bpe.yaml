@@ -1,0 +1,81 @@
+---
+src_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn_bpe_vocab.38000'
+dst_vocab: '/mnt/lustre/xushuang1/cqwang/mt-data/180/eng_bpe_vocab.34000'
+src_vocab_size: 38000
+dst_vocab_size: 34000
+hidden_units: 512
+scale_embedding: True
+attention_dropout_rate: 0.0
+residual_dropout_rate: 0.1
+num_blocks: 6
+num_heads: 8
+train:
+    devices: '0,1,2,3,4,5,6,7'
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/180/chn.bpe.txt'
+    dst_path: '/mnt/lustre/xushuang1/cqwang/mt-data/180/eng.bpe.txt'
+    tokens_per_batch: 25000
+    max_length: 125
+    num_epochs: 500
+    logdir: 'model-180-bpe_bpe'
+    save_freq: 1000
+    summary_freq: 100
+    grads_clip: 5
+    optimizer: 'adam_decay'
+    learning_rate: 0.0001
+    learning_rate_warmup_steps: 4000
+    label_smoothing: 0.1
+    toleration: 10
+dev:
+    batch_size: 256
+    src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.bpe'
+    ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.ref'
+    output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/180.bpe_bpe.output'
+    cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+
+test:
+    batch_size: 256
+    max_target_length: 200
+    lp_alpha: 0.6
+    beam_size: 4
+    devices: '0,1,2,3,4,5,6,7'
+
+    set1:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/NIST02.ref'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST02/180.bpe_bpe.output'
+        cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+    set2:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST03/NIST03.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST03/NIST03.ref'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST03/180.bpe_bpe.output'
+        cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+    set3:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST04/NIST04.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST04/NIST04.ref'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST04/180.bpe_bpe.output'
+        cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+    set4:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST05/NIST05.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST05/NIST05.ref'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/NIST05/180.bpe_bpe.output'
+        cmd: "sh /mnt/lustre/xushuang1/cqwang/mt-data/NewTestSet/bleuTest/test.sh {ref} {output} | grep 'BLEU score =' | awk '{{print($4)}}'"
+    set5:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/dev2010.zh.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/dev2010.en'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/dev2010.180.bpe_bpe.output'
+    set6:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2010.zh.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2010.en'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2010.180.bpe_bpe.output'
+    set7:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2011.zh.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2011.en'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2011.180.bpe_bpe.output'
+    set8:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2012.zh.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2012.en'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2012.180.bpe_bpe.output'
+    set9:
+        src_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2013.zh.bpe'
+        ref_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2013.en'
+        output_path: '/mnt/lustre/xushuang1/cqwang/mt-data/IWSLT15/test2013.180.bpe_bpe.output'

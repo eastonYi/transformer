@@ -59,18 +59,34 @@ def train(config):
                     format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
 
                 # Save model
-                if step % config.train.save_freq == 0:
+                if config.train.save_freq > 0 and step % config.train.save_freq == 0:
                     new_dev_bleu = evaluator.evaluate(**config.dev)
                     if new_dev_bleu >= dev_bleu:
                         mp = config.train.logdir + '/model_epoch_%d_step_%d' % (epoch, step)
                         model.saver.save(sess, mp)
                         logger.info('Save model in %s.' % mp)
                         toleration = config.train.toleration
+                        dev_bleu = new_dev_bleu
                     else:
                         toleration -= 1
                         if toleration <= 0:
                             break
-            else:
+
+            # Save model
+            if config.train.save_freq <= 0:
+                new_dev_bleu = evaluator.evaluate(**config.dev)
+                if new_dev_bleu >= dev_bleu:
+                    mp = config.train.logdir + '/model_epoch_%d' % (epoch)
+                    model.saver.save(sess, mp)
+                    logger.info('Save model in %s.' % mp)
+                    toleration = config.train.toleration
+                    dev_bleu = new_dev_bleu
+                else:
+                    toleration -= 1
+                    if toleration <= 0:
+                        break
+
+            if toleration <= 0:
                 break
         logger.info("Finish training.")
 
