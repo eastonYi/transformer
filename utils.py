@@ -33,8 +33,7 @@ class DataUtil(object):
     """
 
     def __init__(self, config):
-        self.config = config
-        self._logger = logging.getLogger('util')
+        self._config = config
         self._tmps = set()
         self.load_vocab()
 
@@ -56,19 +55,19 @@ class DataUtil(object):
             idx2word = {idx: word for idx, word in enumerate(vocab)}
             return word2idx, idx2word
 
-        self._logger.debug('Load vocabularies %s and %s.' % (self.config.src_vocab, self.config.dst_vocab))
-        self.src2idx, self.idx2src = load_vocab_(self.config.src_vocab, self.config.src_vocab_size)
-        self.dst2idx, self.idx2dst = load_vocab_(self.config.dst_vocab, self.config.dst_vocab_size)
+        logging.debug('Load vocabularies %s and %s.' % (self._config.src_vocab, self._config.dst_vocab))
+        self.src2idx, self.idx2src = load_vocab_(self._config.src_vocab, self._config.src_vocab_size)
+        self.dst2idx, self.idx2dst = load_vocab_(self._config.dst_vocab, self._config.dst_vocab_size)
 
     def get_training_batches(self, shuffle=True):
         """
         Generate batches with fixed batch size.
         """
 
-        src_path = self.config.train.src_path
-        dst_path = self.config.train.dst_path
-        batch_size = self.config.train.batch_size
-        max_length = self.config.train.max_length
+        src_path = self._config.train.src_path
+        dst_path = self._config.train.dst_path
+        batch_size = self._config.train.batch_size
+        max_length = self._config.train.max_length
 
         # Shuffle the training files.
         if shuffle:
@@ -105,7 +104,7 @@ class DataUtil(object):
         Generate batches according to bucket setting.
         """
 
-        buckets = [(i, i) for i in range(10, 100, 5)] + [(self.config.train.max_length, self.config.train.max_length)]
+        buckets = [(i, i) for i in range(10, 100, 5)] + [(self._config.train.max_length, self._config.train.max_length)]
 
         def select_bucket(sl, dl):
             for l1, l2 in buckets:
@@ -114,10 +113,10 @@ class DataUtil(object):
             return None
 
         # Shuffle the training files.
-        src_path = self.config.train.src_path
-        dst_path = self.config.train.dst_path
+        src_path = self._config.train.src_path
+        dst_path = self._config.train.dst_path
         if shuffle:
-            self._logger.debug('Shuffle files %s and %s.' % (src_path, dst_path))
+            logging.debug('Shuffle files %s and %s.' % (src_path, dst_path))
             src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
             self._tmps.add(src_shuf_path)
             self._tmps.add(dst_shuf_path)
@@ -144,9 +143,9 @@ class DataUtil(object):
             caches[bucket][2] += len(src_sent)
             caches[bucket][3] += len(dst_sent)
 
-            if max(caches[bucket][2], caches[bucket][3]) >= self.config.train.tokens_per_batch:
+            if max(caches[bucket][2], caches[bucket][3]) >= self._config.train.tokens_per_batch:
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
-                self._logger.debug(
+                logging.debug(
                     'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
                 yield batch
                 caches[bucket] = [[], [], 0, 0]
@@ -154,9 +153,9 @@ class DataUtil(object):
         # Clean remain sentences.
         for bucket in buckets:
             # Ensure each device at least get one sample.
-            if len(caches[bucket][0]) > len(self.config.train.devices.split(',')):
+            if len(caches[bucket][0]) > len(self._config.train.devices.split(',')):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
-            self._logger.debug(
+            logging.debug(
                 'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
             yield batch
 
@@ -306,7 +305,7 @@ def residual(inputs, outputs, dropout_rate):
     Args:
         inputs: A Tensor.
         outputs: A Tensor.
-        dropout_rate: A float.
+        dropout_rate: A float range from [0, 1).
 
     Returns:
         A Tensor.
@@ -320,10 +319,10 @@ def split_tensor(input, n):
     """
     Split the tensor input to n tensors.
     Args:
-        inputs: A tensor with size [b, ...].
-        n: A integer.
+        input: a tensor with size [b, ...].
+        n: a integer.
 
-    Returns: A tensor list, each tensor has size [b/n, ...].
+    Returns: a tensor list, each tensor has size [b/n, ...].
     """
     batch_size = tf.shape(input)[0]
     ls = tf.cast(tf.lin_space(0.0, tf.cast(batch_size, FLOAT_TYPE), n + 1), INT_TYPE)

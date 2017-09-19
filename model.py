@@ -12,7 +12,6 @@ class Model(object):
     def __init__(self, config, devices):
         self.graph = tf.Graph()
         self._config = config
-        self._logger = logging.getLogger('model')
 
         self._devices = ['/gpu:'+i.strip() for i in devices.split(',') if i] or ['/cpu:0']
         # If we have multiple devices (typically GPUs), we set /cpu:0 as the sync device.
@@ -48,7 +47,7 @@ class Model(object):
 
     def build_train_model(self, reuse=None):
         """Build model for training. """
-        self._logger.info('Build train model.')
+        logging.info('Build train model.')
         self.prepare_training()
 
         def choose_device(op, device):
@@ -63,7 +62,7 @@ class Model(object):
             acc_list, loss_list, gv_list = [], [], []
             for i, (X, Y, device) in enumerate(zip(Xs, Ys, self._devices)):
                 with tf.device(lambda op: choose_device(op, device)):
-                    self._logger.info('Build model on %s.' % device)
+                    logging.info('Build model on %s.' % device)
                     encoder_output = self.encoder(X, is_training=True, reuse=i>0 or None)
                     decoder_output = self.decoder(shift_right(Y), encoder_output, is_training=True, reuse=i > 0 or None)
                     acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
@@ -96,7 +95,7 @@ class Model(object):
 
     def build_test_model(self, reuse=None):
         """Build model for inference."""
-        self._logger.info('Build test model.')
+        logging.info('Build test model.')
         with self.graph.as_default(), tf.device(self._sync_device), \
              tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
             decoder_input = shift_right(self.dst_pl)
@@ -107,7 +106,8 @@ class Model(object):
             loss_sum=0
             for i, (X, Y, dec_input, device) in enumerate(zip(Xs, Ys, dec_inputs, self._devices)):
                 with tf.device(device):
-                    self._logger.info('Build model on %s.' % device)
+                    logging.info('Build model on %s.' % device)
+
                     # Avoid errors caused by empty input by a condition phrase.
                     def true_fn():
                         enc_output = self.encoder(X, is_training=False, reuse=i > 0 or None)
@@ -141,17 +141,17 @@ class Model(object):
     def encoder(self, encoder_input, is_training, reuse):
         """Encoder."""
         with tf.variable_scope("encoder", reuse=reuse):
-            return self.encoder_body(encoder_input, is_training)
+            return self.encoder_impl(encoder_input, is_training)
 
     def decoder(self, decoder_input, encoder_output, is_training, reuse):
         """Decoder"""
         with tf.variable_scope("decoder", reuse=reuse):
-            return self.decoder_body(decoder_input, encoder_output, is_training)
+            return self.decoder_impl(decoder_input, encoder_output, is_training)
 
     def decoder_with_caching(self, decoder_input, decoder_cache, encoder_output, is_training, reuse):
         """Incremental Decoder"""
         with tf.variable_scope("decoder", reuse=reuse):
-            return self.decoder_with_caching_body(decoder_input, decoder_cache, encoder_output, is_training)
+            return self.decoder_with_caching_impl(decoder_input, decoder_cache, encoder_output, is_training)
 
     def beam_search(self, encoder_output, reuse):
         """Beam search in graph."""
@@ -302,9 +302,9 @@ class Model(object):
 
         return acc, mean_loss
 
-    def encoder_body(self, encoder_input, is_training):
+    def encoder_impl(self, encoder_input, is_training):
         """
-        This is a interface leave to be implemented by sub classes.
+        This is an interface leave to be implemented by sub classes.
         Args:
             encoder_input: A tensor with shape [batch_size, src_length]
 
@@ -313,9 +313,9 @@ class Model(object):
         """
         raise NotImplementedError()
 
-    def decoder_body(self, decoder_input, encoder_output, is_training):
+    def decoder_impl(self, decoder_input, encoder_output, is_training):
         """
-        This is a interface leave to be implemented by sub classes.
+        This is an interface leave to be implemented by sub classes.
         Args:
             decoder_input: A Tensor with shape [batch_size, dst_length]
             encoder_output: A Tensor with shape [batch_size, src_length, num_hidden]
@@ -325,9 +325,9 @@ class Model(object):
         """
         raise NotImplementedError()
 
-    def decoder_with_caching_body(self, decoder_input, decoder_cache, encoder_output, is_training):
+    def decoder_with_caching_impl(self, decoder_input, decoder_cache, encoder_output, is_training):
         """
-        This is a interface leave to be implemented by sub classes.
+        This is an interface leave to be implemented by sub classes.
         Args:
             decoder_input: A Tensor with shape [batch_size, dst_length]
             decoder_cache: A Tensor with shape [batch_size, *, *, num_hidden]
@@ -343,7 +343,7 @@ class Transformer(Model):
     def __init__(self, *args, **kargs):
         super(self.__class__, self).__init__(*args, **kargs)
 
-    def encoder_body(self, encoder_input, is_training):
+    def encoder_impl(self, encoder_input, is_training):
 
         attention_dropout_rate = self._config.attention_dropout_rate if is_training else 0.0
         residual_dropout_rate = self._config.residual_dropout_rate if is_training else 0.0
@@ -368,7 +368,7 @@ class Transformer(Model):
             with tf.variable_scope("block_{}".format(i)):
                 # Multihead Attention
                 encoder_output = residual(encoder_output,
-                                          common_attention.multihead_attention(
+                                          multihead_attention(
                                               query_antecedent=encoder_output,
                                               memory_antecedent=None,
                                               bias=common_attention.attention_bias_ignore_padding(encoder_padding),
@@ -383,7 +383,7 @@ class Transformer(Model):
 
                 # Feed Forward
                 encoder_output = residual(encoder_output,
-                                          common_attention.common_layers.conv_hidden_relu(
+                                          common_layers.conv_hidden_relu(
                                               inputs=encoder_output,
                                               hidden_size=4 * self._config.hidden_units,
                                               output_size=self._config.hidden_units,
@@ -393,7 +393,7 @@ class Transformer(Model):
         encoder_output *= tf.expand_dims(1.0 - tf.to_float(encoder_padding), axis=-1)
         return encoder_output
 
-    def decoder_body(self, decoder_input, encoder_output, is_training):
+    def decoder_impl(self, decoder_input, encoder_output, is_training):
 
         attention_dropout_rate = self._config.attention_dropout_rate if is_training else 0.0
         residual_dropout_rate = self._config.residual_dropout_rate if is_training else 0.0
@@ -420,7 +420,7 @@ class Transformer(Model):
             with tf.variable_scope("block_{}".format(i)):
                 # Multihead Attention (self-attention)
                 decoder_output = residual(decoder_output,
-                                          common_attention.multihead_attention(
+                                          multihead_attention(
                                               query_antecedent=decoder_output,
                                               memory_antecedent=None,
                                               bias=self_attention_bias,
@@ -435,7 +435,7 @@ class Transformer(Model):
 
                 # Multihead Attention (vanilla attention)
                 decoder_output = residual(decoder_output,
-                                          common_attention.multihead_attention(
+                                          multihead_attention(
                                               query_antecedent=decoder_output,
                                               memory_antecedent=encoder_output,
                                               bias=encoder_attention_bias,
@@ -458,7 +458,7 @@ class Transformer(Model):
                                           dropout_rate=residual_dropout_rate)
         return decoder_output
 
-    def decoder_with_caching_body(self, decoder_input, decoder_cache, encoder_output, is_training):
+    def decoder_with_caching_impl(self, decoder_input, decoder_cache, encoder_output, is_training):
 
         attention_dropout_rate = self._config.attention_dropout_rate if is_training else 0.0
         residual_dropout_rate = self._config.residual_dropout_rate if is_training else 0.0

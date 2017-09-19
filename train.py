@@ -72,7 +72,7 @@ def train(config):
                         if toleration <= 0:
                             break
 
-            # Save model
+            # Save model per epoch if config.train.save_freq is less than zero
             if config.train.save_freq <= 0:
                 new_dev_bleu = evaluator.evaluate(**config.dev)
                 if new_dev_bleu >= dev_bleu:
