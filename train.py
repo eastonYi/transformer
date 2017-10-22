@@ -100,7 +100,7 @@ if __name__ == '__main__':
     # Logger
     if not os.path.exists(config.train.logdir):
         os.makedirs(config.train.logdir)
-    logging.basicConfig(filename=config.train.logdir+'/train.log', level=logging.DEBUG)
+    logging.basicConfig(filename=config.train.logdir+'/train.log', level=logging.INFO)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     logging.getLogger('').addHandler(console)

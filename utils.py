@@ -82,7 +82,7 @@ class DataUtil(object):
             # If exceed the max length, abandon this sentence pair.
             src_sent = src_sent.split()
             dst_sent = dst_sent.split()
-            if  len(src_sent) > max_length or len(dst_sent) > max_length:
+            if len(src_sent) > max_length or len(dst_sent) > max_length:
                 continue
             src_sents.append(src_sent)
             dst_sents.append(dst_sent)
@@ -155,9 +155,9 @@ class DataUtil(object):
             # Ensure each device at least get one sample.
             if len(caches[bucket][0]) > len(self._config.train.devices.split(',')):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
-            logging.debug(
-                'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
-            yield batch
+                logging.debug(
+                    'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
+                yield batch
 
         # Remove shuffled files when epoch finished.
         if shuffle:

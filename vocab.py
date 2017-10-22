@@ -30,14 +30,14 @@ def make_vocab(fpath, fname):
     for l in codecs.open(fpath, 'r', 'utf-8'):
         words = l.split()
         word2cnt.update(Counter(words))
-    word2cnt.update({"<PAD>":   10000000000,
-                     "<UNK>":   1000000000,
-                     "<S>":     100000000,
-                     "</S>":    10000000})
+    word2cnt.update({"<PAD>":   10000000000000,
+                     "<UNK>":   1000000000000,
+                     "<S>":     100000000000,
+                     "</S>":    10000000000})
     with codecs.open(fname, 'w', 'utf-8') as fout:
         for word, cnt in word2cnt.most_common():
             fout.write(u"{}\t{}\n".format(word, cnt))
-    logging.info('Vocab path: {}\t size: {}'.format(fpath, len(word2cnt)))
+    logging.info('Vocab path: {}\t size: {}'.format(fname, len(word2cnt)))
 
 
 if __name__ == '__main__':
