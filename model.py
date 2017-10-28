@@ -5,7 +5,7 @@ import logging
 import tensor2tensor.common_attention as common_attention
 import tensor2tensor.common_layers as common_layers
 from utils import FLOAT_TYPE, INT_TYPE, learning_rate_decay, multihead_attention, \
-    average_gradients, shift_right, split_tensor, embedding, residual
+    average_gradients, shift_right, embedding, residual
 
 
 class Model(object):
@@ -19,8 +19,14 @@ class Model(object):
 
         # Placeholders and saver.
         with self.graph.as_default():
-            self.src_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl')
-            self.dst_pl = tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl')
+            src_pls = []
+            dst_pls = []
+            for i, device in enumerate(self._devices):
+                with tf.device(device):
+                    src_pls.append(tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl_{}'.format(i)))
+                    dst_pls.append(tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl_{}'.format(i)))
+            self.src_pls = tuple(src_pls)
+            self.dst_pls = tuple(dst_pls)
 
     def prepare_training(self):
         with self.graph.as_default():
@@ -28,18 +34,16 @@ class Model(object):
             self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
                                                trainable=False, initializer=tf.zeros_initializer)
 
+            self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate, dtype=FLOAT_TYPE)
             if self._config.train.optimizer == 'adam':
-                self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate)
                 self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'adam_decay':
-                self.learning_rate = learning_rate_decay(self._config, self.global_step)
+                self.learning_rate *= learning_rate_decay(self._config, self.global_step)
                 self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                                                         beta1=0.9, beta2=0.98, epsilon=1e-9)
             elif self._config.train.optimizer == 'sgd':
-                self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate)
                 self._optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'mom':
-                self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate)
                 self._optimizer = tf.train.MomentumOptimizer(self.learning_rate, momentum=0.9)
 
             # Uniform scaling initializer.
@@ -57,10 +61,8 @@ class Model(object):
 
         with self.graph.as_default(), tf.device(self._sync_device), \
             tf.variable_scope(tf.get_variable_scope(), initializer=self._initializer, reuse=reuse):
-            Xs = split_tensor(self.src_pl, len(self._devices))
-            Ys = split_tensor(self.dst_pl, len(self._devices))
             acc_list, loss_list, gv_list = [], [], []
-            for i, (X, Y, device) in enumerate(zip(Xs, Ys, self._devices)):
+            for i, (X, Y, device) in enumerate(zip(self.src_pls, self.dst_pls, self._devices)):
                 with tf.device(lambda op: choose_device(op, device)):
                     logging.info('Build model on %s.' % device)
                     encoder_output = self.encoder(X, is_training=True, reuse=i>0 or None)
@@ -78,9 +80,13 @@ class Model(object):
             for g, v in grads_and_vars:
                 tf.summary.histogram('variables/' + v.name.split(':')[0], v)
                 tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
-            grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
-                                                            clip_norm=self._config.train.grads_clip)
-            grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
+            if self._config.train.grads_clip > 0:
+                grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
+                                                                clip_norm=self._config.train.grads_clip)
+                grads_and_vars = zip(grads, [gv[1] for gv in grads_and_vars])
+            else:
+                self.grads_norm = tf.global_norm([gv[0] for gv in grads_and_vars])
+
             self.train_op = self._optimizer.apply_gradients(grads_and_vars, global_step=self.global_step)
 
             # Summaries
@@ -98,17 +104,15 @@ class Model(object):
         logging.info('Build test model.')
         with self.graph.as_default(), tf.device(self._sync_device), \
              tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
-            decoder_input = shift_right(self.dst_pl)
-            Xs = split_tensor(self.src_pl, len(self._devices))
-            Ys = split_tensor(self.dst_pl, len(self._devices))
-            dec_inputs = split_tensor(decoder_input, len(self._devices))
+
             prediction_list = []
             loss_sum=0
-            for i, (X, Y, dec_input, device) in enumerate(zip(Xs, Ys, dec_inputs, self._devices)):
+            for i, (X, Y, device) in enumerate(zip(self.src_pls, self.dst_pls, self._devices)):
                 with tf.device(device):
                     logging.info('Build model on %s.' % device)
-
+                    dec_input = shift_right(Y)
                     # Avoid errors caused by empty input by a condition phrase.
+
                     def true_fn():
                         enc_output = self.encoder(X, is_training=False, reuse=i > 0 or None)
                         prediction = self.beam_search(enc_output, reuse=i > 0 or None)
@@ -360,7 +364,7 @@ class Transformer(Model):
         encoder_output = common_attention.add_timing_signal_1d(encoder_output)
         # Dropout
         encoder_output = tf.layers.dropout(encoder_output,
-                                           rate=self._config.residual_dropout_rate,
+                                           rate=residual_dropout_rate,
                                            training=is_training)
 
         # Blocks
@@ -379,7 +383,7 @@ class Transformer(Model):
                                               dropout_rate=attention_dropout_rate,
                                               name='encoder_self_attention',
                                               summaries=True),
-                                          dropout_rate=self._config.residual_dropout_rate)
+                                          dropout_rate=residual_dropout_rate)
 
                 # Feed Forward
                 encoder_output = residual(encoder_output,
@@ -410,7 +414,7 @@ class Transformer(Model):
         decoder_output += common_attention.add_timing_signal_1d(decoder_output)
         # Dropout
         decoder_output = tf.layers.dropout(decoder_output,
-                                           rate=self._config.residual_dropout_rate,
+                                           rate=residual_dropout_rate,
                                            training=is_training)
         # Bias for preventing peeping later information
         self_attention_bias = common_attention.attention_bias_lower_triangle(tf.shape(decoder_input)[1])

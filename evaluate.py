@@ -11,7 +11,7 @@ from tempfile import mkstemp
 from argparse import ArgumentParser
 
 from model import Transformer
-from utils import DataUtil, AttrDict
+from utils import DataUtil, AttrDict, expand_feed_dict
 
 
 class Evaluator(object):
@@ -42,10 +42,10 @@ class Evaluator(object):
         self.du = du
 
     def beam_search(self, X):
-        return self.sess.run(self.model.prediction, feed_dict={self.model.src_pl: X})
+        return self.sess.run(self.model.prediction, feed_dict=expand_feed_dict({self.model.src_pls: X}))
 
     def loss(self, X, Y):
-        return self.sess.run(self.model.loss_sum, feed_dict={self.model.src_pl: X, self.model.dst_pl: Y})
+        return self.sess.run(self.model.loss_sum, feed_dict=expand_feed_dict({self.model.src_pls: X, self.model.dst_pls: Y}))
 
     def translate(self, src_path, output_path, batch_size):
         logging.info('Translate %s.' % src_path)

@@ -7,7 +7,7 @@ from tempfile import mkstemp
 from itertools import izip
 import tensorflow as tf
 
-from tensor2tensor import common_layers, common_attention
+from tensor2tensor import common_layers, common_attention, expert_utils
 
 INT_TYPE = np.int32
 FLOAT_TYPE = np.float32
@@ -175,7 +175,7 @@ class DataUtil(object):
 
         for l in fds[0]:
             lines = [l.strip()] + [ff.readline().strip() for ff in fds[1:]]
-            print("|||||".join(lines), file=tf)
+            print("<CONCATE4SHUF>".join(lines), file=tf)
 
         [ff.close() for ff in fds]
         tf.close()
@@ -185,7 +185,7 @@ class DataUtil(object):
         fds = [open(ff + '.{}.shuf'.format(os.getpid()), 'w') for ff in list_of_files]
 
         for l in open(tpath + '.shuf'):
-            s = l.strip().split('|||||')
+            s = l.strip().split('<CONCATE4SHUF>')
             for i, fd in enumerate(fds):
                 print(s[i], file=fd)
 
@@ -263,6 +263,21 @@ class DataUtil(object):
         return sents
 
 
+def expand_feed_dict(feed_dict):
+    new_feed_dict = {}
+    for k, v in feed_dict.items():
+        if type(k) is not tuple:
+            new_feed_dict[k] = v
+        else:
+            # Split v along the first dimension.
+            n = len(k)
+            batch_size = v.shape[0]
+            span = batch_size // n
+            for i, p in enumerate(k):
+                new_feed_dict[p] = v[i * span: i * span + span]
+    return new_feed_dict
+
+
 def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
     Note that this function provides a synchronization point across all towers.
@@ -310,23 +325,9 @@ def residual(inputs, outputs, dropout_rate):
     Returns:
         A Tensor.
     """
-    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate)
+    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=True)
     output = common_layers.layer_norm(output)
     return output
-
-
-def split_tensor(input, n):
-    """
-    Split the tensor input to n tensors.
-    Args:
-        input: a tensor with size [b, ...].
-        n: a integer.
-
-    Returns: a tensor list, each tensor has size [b/n, ...].
-    """
-    batch_size = tf.shape(input)[0]
-    ls = tf.cast(tf.lin_space(0.0, tf.cast(batch_size, FLOAT_TYPE), n + 1), INT_TYPE)
-    return [input[ls[i]:ls[i+1]] for i in range(n)]
 
 
 def learning_rate_decay(config, global_step):
@@ -346,11 +347,12 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
     """Embed x of type int64 into dense vectors."""
     with tf.variable_scope(
         name, default_name="embedding", values=[x], reuse=reuse):
+        # embedding_var = tf.get_variable("kernel", [vocab_size, dense_size], partitioner=tf.fixed_size_partitioner(32))
         embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
-        emb_x = tf.gather(embedding_var, x)
+        output = tf.gather(embedding_var, x)
         if multiplier != 1.0:
-            emb_x *= multiplier
-        return emb_x
+            output *= multiplier
+        return output
 
 
 def multihead_attention(query_antecedent,

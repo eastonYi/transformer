@@ -6,7 +6,7 @@ import logging
 from argparse import ArgumentParser
 import tensorflow as tf
 
-from utils import DataUtil, AttrDict
+from utils import DataUtil, AttrDict, expand_feed_dict
 from model import Transformer
 from evaluate import Evaluator
 
@@ -36,7 +36,7 @@ def train(config):
         evaluator = Evaluator()
         evaluator.init_from_existed(model, sess, du)
 
-        dev_bleu = evaluator.evaluate(**config.dev)
+        dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else 0
         toleration = config.train.toleration
         for epoch in range(1, config.train.num_epochs+1):
             for batch in du.get_training_batches_with_buckets():
@@ -47,20 +47,20 @@ def train(config):
                     step, lr, gnorm, loss, acc, summary, _ = sess.run(
                         [model.global_step, model.learning_rate, model.grads_norm,
                          model.loss, model.accuracy, model.summary_op, model.train_op],
-                        feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
+                        feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
                     summary_writer.add_summary(summary, global_step=step)
                 else:
                     step, lr, gnorm, loss, acc, _ = sess.run(
                         [model.global_step, model.learning_rate, model.grads_norm,
                          model.loss, model.accuracy, model.train_op],
-                        feed_dict={model.src_pl: batch[0], model.dst_pl: batch[1]})
+                        feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
                 logger.info(
                     'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
                     format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
 
                 # Save model
                 if config.train.save_freq > 0 and step % config.train.save_freq == 0:
-                    new_dev_bleu = evaluator.evaluate(**config.dev)
+                    new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
                     if new_dev_bleu >= dev_bleu:
                         mp = config.train.logdir + '/model_epoch_%d_step_%d' % (epoch, step)
                         model.saver.save(sess, mp)
@@ -74,7 +74,7 @@ def train(config):
 
             # Save model per epoch if config.train.save_freq is less than zero
             if config.train.save_freq <= 0:
-                new_dev_bleu = evaluator.evaluate(**config.dev)
+                new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
                 if new_dev_bleu >= dev_bleu:
                     mp = config.train.logdir + '/model_epoch_%d' % (epoch)
                     model.saver.save(sess, mp)
