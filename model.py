@@ -39,8 +39,8 @@ class Model(object):
                 self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'adam_decay':
                 self.learning_rate *= learning_rate_decay(self._config, self.global_step)
-                self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                                        beta1=0.9, beta2=0.98, epsilon=1e-9)
+                self._optimizer = \
+                    tf.train.AdamOptimizer(learning_rate=self.learning_rate, beta1=0.9, beta2=0.98, epsilon=1e-9)
             elif self._config.train.optimizer == 'sgd':
                 self._optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'mom':
@@ -55,7 +55,7 @@ class Model(object):
         self.prepare_training()
 
         def choose_device(op, device):
-            if op.type.startswith('Variable'):
+            if op.type in {'Variable', 'VariableV2', 'VarHandleOp'}:
                 return self._sync_device
             return device
 
@@ -77,9 +77,9 @@ class Model(object):
 
             # Clip gradients and then apply.
             grads_and_vars = average_gradients(gv_list)
-            for g, v in grads_and_vars:
-                tf.summary.histogram('variables/' + v.name.split(':')[0], v)
-                tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
+            # for g, v in grads_and_vars:
+            #     tf.summary.histogram('variables/' + v.name.split(':')[0], v)
+            #     tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
             if self._config.train.grads_clip > 0:
                 grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
                                                                 clip_norm=self._config.train.grads_clip)

@@ -44,25 +44,25 @@ def train(config):
                 step = sess.run(model.global_step)
                 # Summary
                 if step % config.train.summary_freq == 0:
-                    step, lr, gnorm, loss, acc, summary, _ = sess.run(
-                        [model.global_step, model.learning_rate, model.grads_norm,
-                         model.loss, model.accuracy, model.summary_op, model.train_op],
+                    step, lr, loss, summary, _ = sess.run(
+                        [model.global_step, model.learning_rate,
+                         model.loss, model.summary_op, model.train_op],
                         feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
                     summary_writer.add_summary(summary, global_step=step)
                 else:
-                    step, lr, gnorm, loss, acc, _ = sess.run(
-                        [model.global_step, model.learning_rate, model.grads_norm,
-                         model.loss, model.accuracy, model.train_op],
+                    step, lr, loss, _ = sess.run(
+                        [model.global_step, model.learning_rate,
+                         model.loss, model.train_op],
                         feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
                 logger.info(
-                    'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tgnorm: {3:.4f}\tloss: {4:.4f}\tacc: {5:.4f}\ttime: {6:.4f}'.
-                    format(epoch, step, lr, gnorm, loss, acc, time.time() - start_time))
+                    'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tloss: {3:.4f}\ttime: {4:.4f}'.
+                    format(epoch, step, lr, loss, time.time() - start_time))
 
                 # Save model
                 if config.train.save_freq > 0 and step % config.train.save_freq == 0:
                     new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
                     if new_dev_bleu >= dev_bleu:
-                        mp = config.train.logdir + '/model_epoch_%d_step_%d' % (epoch, step)
+                        mp = config.train.logdir + '/model_step_{}'.format(step)
                         model.saver.save(sess, mp)
                         logger.info('Save model in %s.' % mp)
                         toleration = config.train.toleration
@@ -76,7 +76,7 @@ def train(config):
             if config.train.save_freq <= 0:
                 new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
                 if new_dev_bleu >= dev_bleu:
-                    mp = config.train.logdir + '/model_epoch_%d' % (epoch)
+                    mp = config.train.logdir + '/model_epoch_{}'.format(epoch)
                     model.saver.save(sess, mp)
                     logger.info('Save model in %s.' % mp)
                     toleration = config.train.toleration

@@ -7,7 +7,7 @@ from tempfile import mkstemp
 from itertools import izip
 import tensorflow as tf
 
-from tensor2tensor import common_layers, common_attention, expert_utils
+from tensor2tensor import common_layers, common_attention
 
 INT_TYPE = np.int32
 FLOAT_TYPE = np.float32
@@ -347,7 +347,6 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
     """Embed x of type int64 into dense vectors."""
     with tf.variable_scope(
         name, default_name="embedding", values=[x], reuse=reuse):
-        # embedding_var = tf.get_variable("kernel", [vocab_size, dense_size], partitioner=tf.fixed_size_partitioner(32))
         embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
         output = tf.gather(embedding_var, x)
         if multiplier != 1.0:
