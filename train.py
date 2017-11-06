@@ -17,7 +17,7 @@ def train(config):
     """Train a model with a config file."""
     du = DataUtil(config=config)
     model = Transformer(config=config, devices=config.train.devices)
-    model.build_train_model()
+    model.build_train_model(test=config.train.eval_on_dev)
 
     sess_config = tf.ConfigProto()
     sess_config.gpu_options.allow_growth = True
@@ -28,15 +28,15 @@ def train(config):
     with tf.Session(config=sess_config, graph=model.graph) as sess:
         try:
             model.saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
-        except:
+        except Exception, e:
             # Initialize all variables.
             sess.run(tf.global_variables_initializer())
-            logger.info('Failed to reload model.')
+            logger.info(e)
 
         evaluator = Evaluator()
         evaluator.init_from_existed(model, sess, du)
 
-        dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else 0
+        dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else 0
         toleration = config.train.toleration
         for epoch in range(1, config.train.num_epochs+1):
             for batch in du.get_training_batches_with_buckets():
@@ -60,7 +60,7 @@ def train(config):
 
                 # Save model
                 if config.train.save_freq > 0 and step % config.train.save_freq == 0:
-                    new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
+                    new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
                     if new_dev_bleu >= dev_bleu:
                         mp = config.train.logdir + '/model_step_{}'.format(step)
                         model.saver.save(sess, mp)
@@ -74,7 +74,7 @@ def train(config):
 
             # Save model per epoch if config.train.save_freq is less than zero
             if config.train.save_freq <= 0:
-                new_dev_bleu = evaluator.evaluate(**config.dev) if 'dev' in config else dev_bleu + 1
+                new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
                 if new_dev_bleu >= dev_bleu:
                     mp = config.train.logdir + '/model_epoch_{}'.format(epoch)
                     model.saver.save(sess, mp)

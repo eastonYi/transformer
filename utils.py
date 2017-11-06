@@ -104,17 +104,19 @@ class DataUtil(object):
         Generate batches according to bucket setting.
         """
 
-        buckets = [(i, i) for i in range(10, 100, 5)] + [(self._config.train.max_length, self._config.train.max_length)]
+        buckets = [(i, i) for i in range(5, 1000000, 3)]
 
         def select_bucket(sl, dl):
             for l1, l2 in buckets:
                 if sl < l1 and dl < l2:
-                    return (l1, l2)
-            return None
+                    return l1, l2
+            raise Exception("The sequence is too long: ({}, {})".format(sl, dl))
 
         # Shuffle the training files.
         src_path = self._config.train.src_path
         dst_path = self._config.train.dst_path
+        max_length = self._config.train.max_length
+
         if shuffle:
             logging.debug('Shuffle files %s and %s.' % (src_path, dst_path))
             src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
@@ -133,6 +135,9 @@ class DataUtil(object):
 
             src_sent = src_sent.split()
             dst_sent = dst_sent.split()
+
+            if len(src_sent) > max_length or len(dst_sent) > max_length:
+                continue
 
             bucket = select_bucket(len(src_sent), len(dst_sent))
             if bucket is None:  # No bucket is selected when the sentence length exceed the max length.
@@ -325,7 +330,7 @@ def residual(inputs, outputs, dropout_rate):
     Returns:
         A Tensor.
     """
-    output = inputs + tf.layers.dropout(outputs, rate=dropout_rate, training=True)
+    output = inputs + tf.nn.dropout(outputs, 1 - dropout_rate)
     output = common_layers.layer_norm(output)
     return output
 
@@ -352,6 +357,36 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
         if multiplier != 1.0:
             output *= multiplier
         return output
+
+
+def dense(inputs, output_size, activation=lambda x: tf.identity(x), use_bias=True, reuse=None, name=None):
+    argcount = activation.func_code.co_argcount
+    if activation.func_defaults:
+        argcount -= len(activation.func_defaults)
+    assert argcount in (1, 2)
+    with tf.variable_scope(name, "dense", reuse=reuse):
+        if argcount == 1:
+            input_size = inputs.get_shape().as_list()[-1]
+            inputs_shape = tf.unstack(tf.shape(inputs))
+            inputs = tf.reshape(inputs, [-1, input_size])
+            w = tf.get_variable("kernel", [output_size, input_size])
+            outputs = tf.matmul(inputs, w, transpose_b=True)
+            if use_bias:
+                b = tf.get_variable("bias", [output_size])
+                outputs += b
+            outputs = activation(outputs)
+            return tf.reshape(outputs, inputs_shape[:-1] + [output_size])
+        else:
+            arg1 = dense(inputs, output_size, tf.identity, use_bias, name='arg1')
+            arg2 = dense(inputs, output_size, tf.identity, use_bias, name='arg2')
+            return activation(arg1, arg2)
+
+
+def ff_hidden(inputs, hidden_size, output_size, activation, use_bias=True, reuse=None, name=None):
+    with tf.variable_scope(name, "ff_hidden", reuse=reuse):
+        hidden_outputs = dense(inputs, hidden_size, activation, use_bias)
+        outputs = dense(hidden_outputs, output_size, tf.identity, use_bias)
+        return outputs
 
 
 def multihead_attention(query_antecedent,
@@ -395,22 +430,13 @@ def multihead_attention(query_antecedent,
 
         if memory_antecedent is None:
             # self attention
-            combined = common_layers.conv1d(
-              query_antecedent,
-              total_key_depth * 2 + total_value_depth,
-              1,
-              name="qkv_transform")
+            combined = dense(query_antecedent, total_key_depth * 2 + total_value_depth, name="qkv_transform")
             q, k, v = tf.split(
               combined, [total_key_depth, total_key_depth, total_value_depth],
               axis=2)
         else:
-            q = common_layers.conv1d(
-              query_antecedent, total_key_depth, 1, name="q_transform")
-            combined = common_layers.conv1d(
-              memory_antecedent,
-              total_key_depth + total_value_depth,
-              1,
-              name="kv_transform")
+            q = dense(query_antecedent, total_key_depth, name="q_transform")
+            combined = dense(memory_antecedent, total_key_depth + total_value_depth, name="kv_transform")
             k, v = tf.split(combined, [total_key_depth, total_value_depth], axis=2)
 
         if reserve_last:
@@ -424,5 +450,5 @@ def multihead_attention(query_antecedent,
         x = common_attention.dot_product_attention(
             q, k, v, bias, dropout_rate, summaries, image_shapes)
         x = common_attention.combine_heads(x)
-        x = common_layers.conv1d(x, output_depth, 1, name="output_transform")
+        x = dense(x, output_depth, name="output_transform")
         return x

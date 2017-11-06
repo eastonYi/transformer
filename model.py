@@ -1,11 +1,12 @@
 import tensorflow as tf
 from tensorflow.python.ops import init_ops
 import logging
+import random
 
-import tensor2tensor.common_attention as common_attention
 import tensor2tensor.common_layers as common_layers
+import tensor2tensor.common_attention as common_attention
 from utils import FLOAT_TYPE, INT_TYPE, learning_rate_decay, multihead_attention, \
-    average_gradients, shift_right, embedding, residual
+    average_gradients, shift_right, embedding, residual, dense, ff_hidden
 
 
 class Model(object):
@@ -14,8 +15,6 @@ class Model(object):
         self._config = config
 
         self._devices = ['/gpu:'+i.strip() for i in devices.split(',') if i] or ['/cpu:0']
-        # If we have multiple devices (typically GPUs), we set /cpu:0 as the sync device.
-        self._sync_device = self._devices[0] if len(self._devices) == 1 else '/cpu:0'
 
         # Placeholders and saver.
         with self.graph.as_default():
@@ -39,8 +38,8 @@ class Model(object):
                 self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'adam_decay':
                 self.learning_rate *= learning_rate_decay(self._config, self.global_step)
-                self._optimizer = \
-                    tf.train.AdamOptimizer(learning_rate=self.learning_rate, beta1=0.9, beta2=0.98, epsilon=1e-9)
+                self._optimizer = tf.train.AdamOptimizer(
+                    learning_rate=self.learning_rate, beta1=0.9, beta2=0.98, epsilon=1e-9)
             elif self._config.train.optimizer == 'sgd':
                 self._optimizer = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'mom':
@@ -49,37 +48,69 @@ class Model(object):
             # Uniform scaling initializer.
             self._initializer = init_ops.variance_scaling_initializer(scale=1.0, mode='fan_avg', distribution='uniform')
 
-    def build_train_model(self, reuse=None):
+    def build_train_model(self, test=True, reuse=None):
         """Build model for training. """
         logging.info('Build train model.')
         self.prepare_training()
 
-        def choose_device(op, device):
-            if op.type in {'Variable', 'VariableV2', 'VarHandleOp'}:
-                return self._sync_device
-            return device
-
-        with self.graph.as_default(), tf.device(self._sync_device), \
-            tf.variable_scope(tf.get_variable_scope(), initializer=self._initializer, reuse=reuse):
+        with self.graph.as_default():
             acc_list, loss_list, gv_list = [], [], []
+            cache = {}
+            load = dict([(d, 0) for d in self._devices])
             for i, (X, Y, device) in enumerate(zip(self.src_pls, self.dst_pls, self._devices)):
-                with tf.device(lambda op: choose_device(op, device)):
-                    logging.info('Build model on %s.' % device)
-                    encoder_output = self.encoder(X, is_training=True, reuse=i>0 or None)
-                    decoder_output = self.decoder(shift_right(Y), encoder_output, is_training=True, reuse=i > 0 or None)
-                    acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
-                    acc_list.append(acc)
-                    loss_list.append(loss)
-                    gv_list.append(self._optimizer.compute_gradients(loss))
+
+                def daisy_chain_getter(getter, name, *args, **kwargs):
+                    """Get a variable and cache in a daisy chain."""
+                    device_var_key = (device, name)
+                    if device_var_key in cache:
+                        # if we have the variable on the correct device, return it.
+                        return cache[device_var_key]
+                    if name in cache:
+                        # if we have it on a different device, copy it from the last device
+                        v = tf.identity(cache[name])
+                    else:
+                        var = getter(name, *args, **kwargs)
+                        v = tf.identity(var._ref())  # pylint: disable=protected-access
+                    # update the cache
+                    cache[name] = v
+                    cache[device_var_key] = v
+                    return v
+
+                def balanced_device_setter(op):
+                    """Balance variables to all devices."""
+                    if op.type in {'Variable', 'VariableV2', 'VarHandleOp'}:
+                        # return self._sync_device
+                        min_load = min(load.values())
+                        min_load_devices = [d for d in load if load[d] == min_load]
+                        chosen_device = random.choice(min_load_devices)
+                        load[chosen_device] += op.outputs[0].get_shape().num_elements()
+                        return chosen_device
+                    return device
+
+                def identity_device_setter(op):
+                    return device
+
+                device_setter = balanced_device_setter
+
+                with tf.variable_scope(tf.get_variable_scope(),
+                                       initializer=self._initializer,
+                                       custom_getter=daisy_chain_getter,
+                                       reuse=reuse):
+                    with tf.device(device_setter):
+                        logging.info('Build model on %s.' % device)
+                        encoder_output = self.encoder(X, is_training=True, reuse=i>0 or None)
+                        decoder_output = self.decoder(shift_right(Y), encoder_output, is_training=True, reuse=i > 0 or None)
+                        acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
+                        acc_list.append(acc)
+                        loss_list.append(loss)
+                        gv_list.append(self._optimizer.compute_gradients(loss))
 
             self.accuracy = tf.reduce_mean(acc_list)
             self.loss = tf.reduce_mean(loss_list)
 
             # Clip gradients and then apply.
             grads_and_vars = average_gradients(gv_list)
-            # for g, v in grads_and_vars:
-            #     tf.summary.histogram('variables/' + v.name.split(':')[0], v)
-            #     tf.summary.histogram('gradients/' + v.name.split(':')[0], g)
+
             if self._config.train.grads_clip > 0:
                 grads, self.grads_norm = tf.clip_by_global_norm([gv[0] for gv in grads_and_vars],
                                                                 clip_norm=self._config.train.grads_clip)
@@ -96,14 +127,16 @@ class Model(object):
             tf.summary.scalar('grads_norm', self.grads_norm)
             self.summary_op = tf.summary.merge_all()
 
+            self.saver = tf.train.Saver(var_list=tf.global_variables())
+
         # We may want to test the model during training.
-        self.build_test_model(reuse=True)
+        if test:
+            self.build_test_model(reuse=True)
 
     def build_test_model(self, reuse=None):
         """Build model for inference."""
         logging.info('Build test model.')
-        with self.graph.as_default(), tf.device(self._sync_device), \
-             tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+        with self.graph.as_default(), tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
 
             prediction_list = []
             loss_sum=0
@@ -272,9 +305,11 @@ class Model(object):
 
     def test_output(self, decoder_output, reuse):
         """During test, we only need the last prediction at each time."""
-        with tf.variable_scope("output", reuse=reuse):
-            last_logits = tf.layers.dense(decoder_output[:,-1], self._config.dst_vocab_size)
-            last_preds = tf.to_int32(tf.arg_max(last_logits, dimension=-1))
+        with tf.variable_scope("decoder", reuse=reuse):
+            last_logits = dense(decoder_output[:,-1], self._config.dst_vocab_size, use_bias=False,
+                                name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
+                                reuse=True if self._config.tie_embedding_and_softmax else None)
+            last_preds = tf.to_int32(tf.argmax(last_logits, axis=-1))
             z = tf.nn.log_softmax(last_logits)
             last_k_scores, last_k_preds = tf.nn.top_k(z, k=self._config.test.beam_size, sorted=False)
             last_k_preds = tf.to_int32(last_k_preds)
@@ -282,8 +317,10 @@ class Model(object):
 
     def test_loss(self, decoder_output, Y, reuse):
         """This function help users to compute PPL during test."""
-        with tf.variable_scope("output", reuse=reuse):
-            logits = tf.layers.dense(decoder_output, self._config.dst_vocab_size)
+        with tf.variable_scope("decoder", reuse=reuse):
+            logits = dense(decoder_output, self._config.dst_vocab_size, use_bias=False,
+                           name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
+                           reuse=True if self._config.tie_embedding_and_softmax else None)
             mask = tf.to_float(tf.not_equal(Y, 0))
             labels = tf.one_hot(Y, depth=self._config.dst_vocab_size)
             loss = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)
@@ -292,9 +329,11 @@ class Model(object):
 
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
-        with tf.variable_scope("output", reuse=reuse):
-            logits = tf.layers.dense(decoder_output, self._config.dst_vocab_size)
-            preds = tf.to_int32(tf.arg_max(logits, dimension=-1))
+        with tf.variable_scope("decoder", reuse=reuse):
+            logits = dense(decoder_output, self._config.dst_vocab_size, use_bias=False,
+                           name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
+                           reuse=True if self._config.tie_embedding_and_softmax else None)
+            preds = tf.to_int32(tf.argmax(logits, axis=-1))
             mask = tf.to_float(tf.not_equal(Y, 0))
             acc = tf.reduce_sum(tf.to_float(tf.equal(preds, Y)) * mask) / tf.reduce_sum(mask)
 
@@ -346,6 +385,12 @@ class Model(object):
 class Transformer(Model):
     def __init__(self, *args, **kargs):
         super(self.__class__, self).__init__(*args, **kargs)
+        activations = {"relu": tf.nn.relu,
+                       "sigmoid": tf.sigmoid,
+                       "tanh": tf.tanh,
+                       "swish": lambda x: x * tf.sigmoid(x),
+                       "glu": lambda x, y: x * tf.sigmoid(y)}
+        self._ff_activation = activations[self._config.ff_activation]
 
     def encoder_impl(self, encoder_input, is_training):
 
@@ -387,11 +432,11 @@ class Transformer(Model):
 
                 # Feed Forward
                 encoder_output = residual(encoder_output,
-                                          common_layers.conv_hidden_relu(
+                                          ff_hidden(
                                               inputs=encoder_output,
                                               hidden_size=4 * self._config.hidden_units,
                                               output_size=self._config.hidden_units,
-                                              summaries=True),
+                                              activation=self._ff_activation),
                                           dropout_rate=residual_dropout_rate)
         # Mask padding part to zeros.
         encoder_output *= tf.expand_dims(1.0 - tf.to_float(encoder_padding), axis=-1)
@@ -454,11 +499,11 @@ class Transformer(Model):
 
                 # Feed Forward
                 decoder_output = residual(decoder_output,
-                                          common_layers.conv_hidden_relu(
+                                          ff_hidden(
                                               decoder_output,
                                               hidden_size=4 * self._config.hidden_units,
                                               output_size=self._config.hidden_units,
-                                              summaries=True),
+                                              activation=self._ff_activation),
                                           dropout_rate=residual_dropout_rate)
         return decoder_output
 
@@ -521,11 +566,11 @@ class Transformer(Model):
 
                 # Feed Forward
                 decoder_output = residual(decoder_output,
-                                          common_layers.conv_hidden_relu(
+                                          ff_hidden(
                                               decoder_output,
                                               hidden_size=4 * self._config.hidden_units,
                                               output_size=self._config.hidden_units,
-                                              summaries=True),
+                                              activation=self._ff_activation),
                                           dropout_rate=residual_dropout_rate)
 
                 decoder_output = tf.concat([decoder_cache[:, :, i, :], decoder_output], axis=1)

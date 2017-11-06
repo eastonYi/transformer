@@ -1,0 +1,60 @@
+---
+src_vocab: '/home/cqwang/mt-data/aic/train.en.txt.remBlank.tok.bpe.voc'
+dst_vocab: '/home/cqwang/mt-data/aic/train.zh.seg.txt.remBlank.bpe.voc'
+src_vocab_size: 30400
+dst_vocab_size: 41000
+hidden_units: 512
+scale_embedding: True
+attention_dropout_rate: 0.0
+residual_dropout_rate: 0.1
+tie_embedding_and_softmax: True
+num_blocks: 6
+num_heads: 8
+ff_activation: 'swish'
+train:
+    devices: '0,1,2,3,4,5,6,7'
+    src_path: '/home/cqwang/mt-data/aic/train.en.txt.remBlank.tok.bpe'
+    dst_path: '/home/cqwang/mt-data/aic/train.zh.seg.txt.remBlank.bpe'
+    tokens_per_batch: 25000
+    max_length: 90
+    num_epochs: 50
+    logdir: 'model-aic-base-swish'
+    save_freq: 1000
+    summary_freq: 100
+    show_freq: 50
+    grads_clip: 0
+    optimizer: 'adam_decay'
+    learning_rate: 1
+    learning_rate_warmup_steps: 4000
+    label_smoothing: 0.1
+    toleration: 50
+#dev:
+#    batch_size: 256
+#    src_path: '/home/cqwang/mt-data/aic/textTest/text_ai_challenge_test.en.txt.tok.bpe'
+#    ref_path: '/home/cqwang/mt-data/aic/textTest/valid.en-zh.zh.sgm'
+#    output_path: 'model-aic-big/output.txt'
+#    cmd: "sh /home/cqwang/mt-data/aic/test.sh /home/cqwang/mt-data/aic/textTest/valid.en-zh.en.sgm {ref} {output} | grep 'BLEU score =' | awk '{{print($8)}}'"
+
+test:
+    batch_size: 256
+    max_target_length: 500
+    lp_alpha: 0.6
+    beam_size: 4
+    devices: '0,1,2,3,4,5,6,7'
+    set1:
+        src_path: '/home/cqwang/mt-data/aic/textTest/text_ai_challenge_test.en.txt.tok.bpe'
+        ref_path: '/home/cqwang/mt-data/aic/textTest/valid.en-zh.zh.sgm'
+        output_path: 'model-aic-base-swish/output.txt'
+        cmd: "sh /home/cqwang/mt-data/aic/test.sh /home/cqwang/mt-data/aic/textTest/valid.en-zh.en.sgm {ref} {output} | grep 'BLEU score =' | awk '{{print($8)}}'"
+
+#    set_dev:
+#        src_path: '/home/cqwang/mt-data/aic/test_interp/dev.bpe'
+#        ref_path: '/home/cqwang/mt-data/aic/test_interp/valid.en-zh.zh.sgm'
+#        output_path: 'model-aic-base/output.txt'
+#        cmd: "/home/cqwang/mt-data/aic/test_interp.sh /home/cqwang/mt-data/aic/test_interp/dev.record.txt /home/cqwang/mt-data/aic/test_interp/valid.en-zh.en.sgm {ref} {output} | grep 'BLEU score =' | awk '{{print($8)}}'"
+#
+#    set_testA:
+#        src_path: '/home/cqwang/mt-data/aic/test_interp/testA.bpe'
+#        ref_path: '/home/cqwang/mt-data/aic/test_interp/valid.en-zh.zh.sgm'
+#        output_path: 'model-aic-big/output.txt'
+#        cmd: "/home/cqwang/mt-data/aic/test_interp.sh /home/cqwang/mt-data/aic/test_interp/testA.record.txt /home/cqwang/mt-data/aic/test_interp/valid.en-zh.en.sgm {ref} {output} | grep 'BLEU score =' | awk '{{print($8)}}'"

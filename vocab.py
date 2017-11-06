@@ -52,7 +52,7 @@ if __name__ == '__main__':
     else:
         make_vocab(config.train.src_path, config.src_vocab)
     if os.path.exists(config.dst_vocab):
-        logging.info('Destination vocab already exists at {}'.format(config.src_vocab))
+        logging.info('Destination vocab already exists at {}'.format(config.dst_vocab))
     else:
         make_vocab(config.train.dst_path, config.dst_vocab)
     logging.info("Done")
