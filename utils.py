@@ -259,7 +259,7 @@ class DataUtil(object):
         sents = []
         for y in Y: # for each sentence
             sent = []
-            for i in y: # For each word
+            for i in y:  # For each word
                 if i == 3:  # </S>
                     break
                 w = idx2word[i]
@@ -277,7 +277,7 @@ def expand_feed_dict(feed_dict):
             # Split v along the first dimension.
             n = len(k)
             batch_size = v.shape[0]
-            span = batch_size // n
+            span = (batch_size + n - 1) // n
             for i, p in enumerate(k):
                 new_feed_dict[p] = v[i * span: i * span + span]
     return new_feed_dict

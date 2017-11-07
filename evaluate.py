@@ -57,6 +57,7 @@ class Evaluator(object):
         for X in self.du.get_test_batches(src_path, batch_size):
             Y = self.beam_search(X)
             sents = self.du.indices_to_words(Y)
+            assert len(X) == len(sents)
             for sent in sents:
                 print(sent, file=fd)
             count += len(X)
