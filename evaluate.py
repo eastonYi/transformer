@@ -1,3 +1,6 @@
+"""
+Written by Chunqi Wang in July 2017.
+"""
 from __future__ import print_function
 import codecs
 import os
@@ -11,7 +14,7 @@ from tempfile import mkstemp
 from argparse import ArgumentParser
 
 from model import Transformer
-from utils import DataUtil, AttrDict, expand_feed_dict
+from utils import DataReader, AttrDict, expand_feed_dict
 
 
 class Evaluator(object):
@@ -33,13 +36,13 @@ class Evaluator(object):
         # Restore model.
         self.model.saver.restore(self.sess, tf.train.latest_checkpoint(config.train.logdir))
 
-        self.du = DataUtil(config)
+        self.data_reader = DataReader(config)
 
-    def init_from_existed(self, model, sess, du):
+    def init_from_existed(self, model, sess, data_reader):
         assert model.graph == sess.graph
         self.sess = sess
         self.model = model
-        self.du = du
+        self.data_reader = data_reader
 
     def beam_search(self, X):
         return self.sess.run(self.model.prediction, feed_dict=expand_feed_dict({self.model.src_pls: X}))
@@ -54,9 +57,9 @@ class Evaluator(object):
         count = 0
         token_count = 0
         start = time.time()
-        for X in self.du.get_test_batches(src_path, batch_size):
+        for X in self.data_reader.get_test_batches(src_path, batch_size):
             Y = self.beam_search(X)
-            sents = self.du.indices_to_words(Y)
+            sents = self.data_reader.indices_to_words(Y)
             assert len(X) == len(sents)
             for sent in sents:
                 print(sent, file=fd)
@@ -75,7 +78,7 @@ class Evaluator(object):
         logging.info('Calculate PPL for %s and %s.' % (src_path, dst_path))
         token_count = 0
         loss_sum = 0
-        for batch in self.du.get_test_batches_with_target(src_path, dst_path, batch_size):
+        for batch in self.data_reader.get_test_batches_with_target(src_path, dst_path, batch_size):
             X, Y = batch
             loss_sum += self.loss(X, Y)
             token_count += np.sum(np.greater(Y, 0))

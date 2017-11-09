@@ -1,12 +1,8 @@
-# -*- coding: utf-8 -*-
-#/usr/bin/python2
 """
 June 2017 by kyubyong park. 
 kbpark.linguist@gmail.com.
-https://www.github.com/kyubyong/transformer
 Modified by Chunqi Wang in July 2017.
 """
-from __future__ import print_function
 import codecs
 import os
 import yaml

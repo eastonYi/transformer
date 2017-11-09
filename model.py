@@ -1,10 +1,13 @@
+"""
+Written by Chunqi Wang in July 2017.
+"""
 import tensorflow as tf
 from tensorflow.python.ops import init_ops
 import logging
 import random
 
-import tensor2tensor.common_layers as common_layers
-import tensor2tensor.common_attention as common_attention
+import third_party.tensor2tensor.common_layers as common_layers
+import third_party.tensor2tensor.common_attention as common_attention
 from utils import FLOAT_TYPE, INT_TYPE, learning_rate_decay, multihead_attention, \
     average_gradients, shift_right, embedding, residual, dense, ff_hidden
 

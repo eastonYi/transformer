@@ -1,13 +1,16 @@
+"""
+Written by Chunqi Wang in July 2017.
+"""
 from __future__ import print_function
-import numpy as np
-import os
 import codecs
 import logging
-from tempfile import mkstemp
+import os
 from itertools import izip
+from tempfile import mkstemp
+import numpy as np
 import tensorflow as tf
 
-from tensor2tensor import common_layers, common_attention
+from third_party.tensor2tensor import common_layers, common_attention
 
 INT_TYPE = np.int32
 FLOAT_TYPE = np.float32
@@ -27,9 +30,9 @@ class AttrDict(dict):
         return self[item]
 
 
-class DataUtil(object):
+class DataReader(object):
     """
-    Util class for creating batches for training and testing.
+    Read data and create batches for training and testing.
     """
 
     def __init__(self, config):
@@ -44,7 +47,8 @@ class DataUtil(object):
 
     def load_vocab(self):
         """
-        Load vocab from disk. The fisrt four items in the vocab should be <PAD>, <UNK>, <S>, </S>
+        Load vocab from disk.
+        The first four items in the vocab should be <PAD>, <UNK>, <S>, </S>
         """
 
         def load_vocab_(path, vocab_size):
@@ -158,7 +162,7 @@ class DataUtil(object):
         # Clean remain sentences.
         for bucket in buckets:
             # Ensure each device at least get one sample.
-            if len(caches[bucket][0]) > len(self._config.train.devices.split(',')):
+            if len(caches[bucket][0]) > max(1, len(self._config.train.devices.split(','))):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
                 logging.debug(
                     'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
@@ -269,6 +273,9 @@ class DataUtil(object):
 
 
 def expand_feed_dict(feed_dict):
+    """If the key is a tuple of placeholders,
+    split the input data then feed them into these placeholders.
+    """
     new_feed_dict = {}
     for k, v in feed_dict.items():
         if type(k) is not tuple:
@@ -277,9 +284,17 @@ def expand_feed_dict(feed_dict):
             # Split v along the first dimension.
             n = len(k)
             batch_size = v.shape[0]
-            span = (batch_size + n - 1) // n
+            span = batch_size // n
+            remainder = batch_size % n
+            assert span > 0
+            base = 0
             for i, p in enumerate(k):
-                new_feed_dict[p] = v[i * span: i * span + span]
+                if i < remainder:
+                    end = base + span + 1
+                else:
+                    end = base + span
+                new_feed_dict[p] = v[base: end]
+                base = end
     return new_feed_dict
 
 
@@ -359,7 +374,13 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
         return output
 
 
-def dense(inputs, output_size, activation=lambda x: tf.identity(x), use_bias=True, reuse=None, name=None):
+def dense(inputs,
+          output_size,
+          activation=tf.identity,
+          use_bias=True,
+          reuse_kernel=None,
+          reuse=None,
+          name=None):
     argcount = activation.func_code.co_argcount
     if activation.func_defaults:
         argcount -= len(activation.func_defaults)
@@ -369,10 +390,11 @@ def dense(inputs, output_size, activation=lambda x: tf.identity(x), use_bias=Tru
             input_size = inputs.get_shape().as_list()[-1]
             inputs_shape = tf.unstack(tf.shape(inputs))
             inputs = tf.reshape(inputs, [-1, input_size])
-            w = tf.get_variable("kernel", [output_size, input_size])
+            with tf.variable_scope(tf.get_variable_scope(), reuse=reuse_kernel):
+                w = tf.get_variable("kernel", [output_size, input_size])
             outputs = tf.matmul(inputs, w, transpose_b=True)
             if use_bias:
-                b = tf.get_variable("bias", [output_size])
+                b = tf.get_variable("bias", [output_size], initializer=tf.zeros_initializer)
                 outputs += b
             outputs = activation(outputs)
             return tf.reshape(outputs, inputs_shape[:-1] + [output_size])

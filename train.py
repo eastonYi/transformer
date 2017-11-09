@@ -1,4 +1,6 @@
-from __future__ import print_function
+"""
+Written by Chunqi Wang in July 2017.
+"""
 import yaml
 import time
 import os
@@ -6,7 +8,7 @@ import logging
 from argparse import ArgumentParser
 import tensorflow as tf
 
-from utils import DataUtil, AttrDict, expand_feed_dict
+from utils import DataReader, AttrDict, expand_feed_dict
 from model import Transformer
 from evaluate import Evaluator
 
@@ -15,7 +17,7 @@ def train(config):
     logger = logging.getLogger('')
 
     """Train a model with a config file."""
-    du = DataUtil(config=config)
+    data_reader = DataReader(config=config)
     model = Transformer(config=config, devices=config.train.devices)
     model.build_train_model(test=config.train.eval_on_dev)
 
@@ -34,12 +36,12 @@ def train(config):
             logger.info(e)
 
         evaluator = Evaluator()
-        evaluator.init_from_existed(model, sess, du)
+        evaluator.init_from_existed(model, sess, data_reader)
 
         dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else 0
         toleration = config.train.toleration
         for epoch in range(1, config.train.num_epochs+1):
-            for batch in du.get_training_batches_with_buckets():
+            for batch in data_reader.get_training_batches_with_buckets():
                 start_time = time.time()
                 step = sess.run(model.global_step)
                 # Summary
