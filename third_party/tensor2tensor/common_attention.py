@@ -21,7 +21,7 @@ import math
 
 import tensorflow as tf
 
-from tensor2tensor import common_layers
+from third_party.tensor2tensor import common_layers
 
 
 def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4):

@@ -19,15 +19,12 @@ from __future__ import print_function
 
 import math
 
-# Dependency imports
-
 import numpy as np
-from six.moves import xrange  # pylint: disable=redefined-builtin
-from tensor2tensor import expert_utils as eu
-
 import tensorflow as tf
-
+from six.moves import xrange  # pylint: disable=redefined-builtin
 from tensorflow.python.framework import function
+
+from third_party.tensor2tensor import expert_utils as eu
 
 # This is a global setting. When turned off, no @function.Defun is used.
 allow_defun = True
