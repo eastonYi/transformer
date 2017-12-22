@@ -1,17 +1,16 @@
-"""
-Written by Chunqi Wang in July 2017.
-"""
 from __future__ import print_function
+
 import codecs
-import os
-import tensorflow as tf
-import numpy as np
-import yaml
-import time
-import logging
 import commands
-from tempfile import mkstemp
+import logging
+import os
+import time
 from argparse import ArgumentParser
+from tempfile import mkstemp
+
+import numpy as np
+import tensorflow as tf
+import yaml
 
 from model import Transformer
 from utils import DataReader, AttrDict, expand_feed_dict
@@ -90,17 +89,18 @@ class Evaluator(object):
     def evaluate(self, batch_size, **kargs):
         """Evaluate the model on dev set."""
         src_path = kargs['src_path']
-        ref_path = kargs['ref_path']
         output_path = kargs['output_path']
         cmd = kargs['cmd'] if 'cmd' in kargs else\
             "perl multi-bleu.perl {ref} < {output} 2>/dev/null | awk '{{print($3)}}' | awk -F, '{{print $1}}'"
         self.translate(src_path, output_path, batch_size)
-        bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
-        logging.info('BLEU: {}'.format(bleu))
+        if 'ref_path' in kargs:
+            ref_path = kargs['ref_path']
+            bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
+            logging.info('BLEU: {}'.format(bleu))
+            return float(bleu)
         if 'dst_path' in kargs:
             self.ppl(src_path, kargs['dst_path'], batch_size)
-
-        return float(bleu)
+        return None
 
 
 if __name__ == '__main__':

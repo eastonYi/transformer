@@ -1,19 +1,15 @@
-"""
-Written by Chunqi Wang in July 2017.
-"""
 from __future__ import print_function
+
 import codecs
 import logging
 import os
 from itertools import izip
 from tempfile import mkstemp
+
 import numpy as np
 import tensorflow as tf
 
 from third_party.tensor2tensor import common_layers, common_attention
-
-INT_TYPE = np.int32
-FLOAT_TYPE = np.float32
 
 
 class AttrDict(dict):
@@ -191,7 +187,8 @@ class DataReader(object):
 
         os.system('shuf %s > %s' % (tpath, tpath + '.shuf'))
 
-        fds = [open(ff + '.{}.shuf'.format(os.getpid()), 'w') for ff in list_of_files]
+        fnames = ['/tmp/{}.{}.shuf'.format(i, os.getpid()) for i, ff in enumerate(list_of_files)]
+        fds = [open(fn, 'w') for fn in fnames]
 
         for l in open(tpath + '.shuf'):
             s = l.strip().split('<CONCATE4SHUF>')
@@ -203,7 +200,7 @@ class DataReader(object):
         os.remove(tpath)
         os.remove(tpath + '.shuf')
 
-        return [ff + '.{}.shuf'.format(os.getpid()) for ff in list_of_files]
+        return fnames
 
     def get_test_batches(self, src_path, batch_size):
         # Read batches for testing.
@@ -345,9 +342,9 @@ def residual(inputs, outputs, dropout_rate):
     Returns:
         A Tensor.
     """
-    output = inputs + tf.nn.dropout(outputs, 1 - dropout_rate)
-    output = common_layers.layer_norm(output)
-    return output
+    outputs = inputs + tf.nn.dropout(outputs, 1 - dropout_rate)
+    outputs = common_layers.layer_norm(outputs)
+    return outputs
 
 
 def learning_rate_decay(config, global_step):

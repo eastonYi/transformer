@@ -1,15 +1,13 @@
-"""
-Written by Chunqi Wang in July 2017.
-"""
-import tensorflow as tf
-from tensorflow.python.ops import init_ops
 import logging
 import random
 
-import third_party.tensor2tensor.common_layers as common_layers
+import tensorflow as tf
+from tensorflow.python.ops import init_ops
+
 import third_party.tensor2tensor.common_attention as common_attention
-from utils import FLOAT_TYPE, INT_TYPE, learning_rate_decay, multihead_attention, \
-    average_gradients, shift_right, embedding, residual, dense, ff_hidden
+import third_party.tensor2tensor.common_layers as common_layers
+from utils import average_gradients, shift_right, embedding, residual, dense, ff_hidden
+from utils import learning_rate_decay, multihead_attention
 
 
 class Model(object):
@@ -25,18 +23,18 @@ class Model(object):
             dst_pls = []
             for i, device in enumerate(self._devices):
                 with tf.device(device):
-                    src_pls.append(tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='src_pl_{}'.format(i)))
-                    dst_pls.append(tf.placeholder(dtype=INT_TYPE, shape=[None, None], name='dst_pl_{}'.format(i)))
+                    src_pls.append(tf.placeholder(dtype=tf.int32, shape=[None, None], name='src_pl_{}'.format(i)))
+                    dst_pls.append(tf.placeholder(dtype=tf.int32, shape=[None, None], name='dst_pl_{}'.format(i)))
             self.src_pls = tuple(src_pls)
             self.dst_pls = tuple(dst_pls)
 
     def prepare_training(self):
         with self.graph.as_default():
             # Optimizer
-            self.global_step = tf.get_variable(name='global_step', dtype=INT_TYPE, shape=[],
+            self.global_step = tf.get_variable(name='global_step', dtype=tf.int64, shape=[],
                                                trainable=False, initializer=tf.zeros_initializer)
 
-            self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate, dtype=FLOAT_TYPE)
+            self.learning_rate = tf.convert_to_tensor(self._config.train.learning_rate, dtype=tf.float32)
             if self._config.train.optimizer == 'adam':
                 self._optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             elif self._config.train.optimizer == 'adam_decay':
@@ -157,7 +155,7 @@ class Model(object):
                         return prediction, loss
 
                     def false_fn():
-                        return tf.zeros([0, 0], dtype=INT_TYPE), 0.0
+                        return tf.zeros([0, 0], dtype=tf.int32), 0.0
 
                     prediction, loss = tf.cond(tf.greater(tf.shape(X)[0], 0), true_fn, false_fn)
 
@@ -169,7 +167,7 @@ class Model(object):
             def pad_to_max_length(input, length):
                 """Pad the input (with rank 2) with 3(</S>) to the given length in the second axis."""
                 shape = tf.shape(input)
-                padding = tf.ones([shape[0], length - shape[1]], dtype=INT_TYPE) * 3
+                padding = tf.ones([shape[0], length - shape[1]], dtype=tf.int32) * 3
                 return tf.concat([input, padding], axis=1)
 
             prediction_list = [pad_to_max_length(pred, max_length) for pred in prediction_list]
@@ -234,8 +232,8 @@ class Model(object):
         encoder_output = tf.tile(encoder_output, multiples=[1, beam_size, 1, 1])
         encoder_output = tf.reshape(encoder_output, [batch_size * beam_size, -1, encoder_output.get_shape()[-1].value])
         # [[<S>, <S>, ..., <S>]], shape: [batch_size * beam_size, 1]
-        preds = tf.ones([batch_size * beam_size, 1], dtype=INT_TYPE) * 2
-        scores = tf.constant([0.0] + [-inf] * (beam_size - 1), dtype=FLOAT_TYPE)  # [beam_size]
+        preds = tf.ones([batch_size * beam_size, 1], dtype=tf.int32) * 2
+        scores = tf.constant([0.0] + [-inf] * (beam_size - 1), dtype=tf.float32)  # [beam_size]
         scores = tf.tile(scores, multiples=[batch_size])   # [batch_size * beam_size]
         bias = tf.zeros_like(scores, dtype=tf.bool)
         cache = tf.zeros([batch_size * beam_size, 0, self._config.num_blocks, self._config.hidden_units])

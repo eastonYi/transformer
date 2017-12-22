@@ -1,16 +1,14 @@
-"""
-Written by Chunqi Wang in July 2017.
-"""
-import yaml
-import time
-import os
 import logging
+import os
+import time
 from argparse import ArgumentParser
-import tensorflow as tf
 
-from utils import DataReader, AttrDict, expand_feed_dict
-from model import Transformer
+import tensorflow as tf
+import yaml
+
 from evaluate import Evaluator
+from model import Transformer
+from utils import DataReader, AttrDict, expand_feed_dict
 
 
 def train(config):
@@ -38,56 +36,55 @@ def train(config):
         evaluator = Evaluator()
         evaluator.init_from_existed(model, sess, data_reader)
 
+        global dev_bleu, toleration
         dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else 0
         toleration = config.train.toleration
+
+        def train_one_step(batch):
+            feed_dict = expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]})
+            step, lr, loss, _ = sess.run(
+                [model.global_step, model.learning_rate,
+                 model.loss, model.train_op],
+                feed_dict=feed_dict)
+            if step % config.train.summary_freq == 0:
+                summary = sess.run(model.summary_op, feed_dict=feed_dict)
+                summary_writer.add_summary(summary, global_step=step)
+            return step, lr, loss
+
+        def maybe_save_model():
+            global dev_bleu, toleration
+            new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
+            if new_dev_bleu >= dev_bleu:
+                mp = config.train.logdir + '/model_step_{}'.format(step)
+                model.saver.save(sess, mp)
+                logger.info('Save model in %s.' % mp)
+                toleration = config.train.toleration
+                dev_bleu = new_dev_bleu
+            else:
+                toleration -= 1
+
+        step = 0
         for epoch in range(1, config.train.num_epochs+1):
             for batch in data_reader.get_training_batches_with_buckets():
+
+                # Train normal instances.
                 start_time = time.time()
-                step = sess.run(model.global_step)
-                # Summary
-                if step % config.train.summary_freq == 0:
-                    step, lr, loss, summary, _ = sess.run(
-                        [model.global_step, model.learning_rate,
-                         model.loss, model.summary_op, model.train_op],
-                        feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
-                    summary_writer.add_summary(summary, global_step=step)
-                else:
-                    step, lr, loss, _ = sess.run(
-                        [model.global_step, model.learning_rate,
-                         model.loss, model.train_op],
-                        feed_dict=expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]}))
+                step, lr, loss = train_one_step(batch)
                 logger.info(
                     'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tloss: {3:.4f}\ttime: {4:.4f}'.
                     format(epoch, step, lr, loss, time.time() - start_time))
-
                 # Save model
                 if config.train.save_freq > 0 and step % config.train.save_freq == 0:
-                    new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
-                    if new_dev_bleu >= dev_bleu:
-                        mp = config.train.logdir + '/model_step_{}'.format(step)
-                        model.saver.save(sess, mp)
-                        logger.info('Save model in %s.' % mp)
-                        toleration = config.train.toleration
-                        dev_bleu = new_dev_bleu
-                    else:
-                        toleration -= 1
-                        if toleration <= 0:
-                            break
+                    maybe_save_model()
 
-            # Save model per epoch if config.train.save_freq is less than zero
+            # Save model per epoch if config.train.save_freq is less or equal than zero
             if config.train.save_freq <= 0:
-                new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
-                if new_dev_bleu >= dev_bleu:
-                    mp = config.train.logdir + '/model_epoch_{}'.format(epoch)
-                    model.saver.save(sess, mp)
-                    logger.info('Save model in %s.' % mp)
-                    toleration = config.train.toleration
-                    dev_bleu = new_dev_bleu
-                else:
-                    toleration -= 1
-                    if toleration <= 0:
-                        break
+                maybe_save_model()
 
+            if step >= config.train.num_steps:
+                break
+
+            # Early stop
             if toleration <= 0:
                 break
         logger.info("Finish training.")
