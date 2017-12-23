@@ -158,7 +158,7 @@ class DataReader(object):
         # Clean remain sentences.
         for bucket in buckets:
             # Ensure each device at least get one sample.
-            if len(caches[bucket][0]) >= max(1, len(self._config.train.num_gpus)):
+            if len(caches[bucket][0]) >= max(1, self._config.train.num_gpus):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
                 logging.debug(
                     'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
