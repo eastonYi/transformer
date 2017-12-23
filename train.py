@@ -16,18 +16,18 @@ def train(config):
 
     """Train a model with a config file."""
     data_reader = DataReader(config=config)
-    model = Transformer(config=config, devices=config.train.devices)
+    model = Transformer(config=config, num_gpus=config.train.num_gpus)
     model.build_train_model(test=config.train.eval_on_dev)
 
     sess_config = tf.ConfigProto()
     sess_config.gpu_options.allow_growth = True
     sess_config.allow_soft_placement = True
 
-    summary_writer = tf.summary.FileWriter(config.train.logdir, graph=model.graph)
+    summary_writer = tf.summary.FileWriter(config.model_dir, graph=model.graph)
 
     with tf.Session(config=sess_config, graph=model.graph) as sess:
         try:
-            model.saver.restore(sess, tf.train.latest_checkpoint(config.train.logdir))
+            model.saver.restore(sess, tf.train.latest_checkpoint(config.model_dir))
         except Exception, e:
             # Initialize all variables.
             sess.run(tf.global_variables_initializer())
@@ -55,7 +55,7 @@ def train(config):
             global dev_bleu, toleration
             new_dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else dev_bleu + 1
             if new_dev_bleu >= dev_bleu:
-                mp = config.train.logdir + '/model_step_{}'.format(step)
+                mp = config.model_dir + '/model_step_{}'.format(step)
                 model.saver.save(sess, mp)
                 logger.info('Save model in %s.' % mp)
                 toleration = config.train.toleration
@@ -97,9 +97,9 @@ if __name__ == '__main__':
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
     # Logger
-    if not os.path.exists(config.train.logdir):
-        os.makedirs(config.train.logdir)
-    logging.basicConfig(filename=config.train.logdir+'/train.log', level=logging.INFO)
+    if not os.path.exists(config.model_dir):
+        os.makedirs(config.model_dir)
+    logging.basicConfig(filename=config.model_dir + '/train.log', level=logging.INFO)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     logging.getLogger('').addHandler(console)

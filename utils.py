@@ -158,7 +158,7 @@ class DataReader(object):
         # Clean remain sentences.
         for bucket in buckets:
             # Ensure each device at least get one sample.
-            if len(caches[bucket][0]) > max(1, len(self._config.train.devices.split(','))):
+            if len(caches[bucket][0]) >= max(1, len(self._config.train.num_gpus)):
                 batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
                 logging.debug(
                     'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
@@ -349,7 +349,7 @@ def residual(inputs, outputs, dropout_rate):
 
 def learning_rate_decay(config, global_step):
     """Inverse-decay learning rate until warmup_steps, then decay."""
-    warmup_steps = tf.to_float(config.train.learning_rate_warmup_steps)
+    warmup_steps = tf.to_float(config.train.warmup_steps)
     global_step = tf.to_float(global_step)
     return config.hidden_units ** -0.5 * tf.minimum(
         (global_step + 1.0) * warmup_steps ** -1.5, (global_step + 1.0) ** -0.5)

@@ -25,7 +25,7 @@ class Evaluator(object):
 
     def init_from_config(self, config):
         # self.model = Model(config)
-        self.model = Transformer(config, config.test.devices)
+        self.model = Transformer(config, config.test.num_gpus)
         self.model.build_test_model()
 
         sess_config = tf.ConfigProto()
@@ -33,7 +33,7 @@ class Evaluator(object):
         sess_config.allow_soft_placement = True
         self.sess = tf.Session(config=sess_config, graph=self.model.graph)
         # Restore model.
-        self.model.saver.restore(self.sess, tf.train.latest_checkpoint(config.train.logdir))
+        self.model.saver.restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
 
         self.data_reader = DataReader(config)
 

@@ -11,11 +11,11 @@ from utils import learning_rate_decay, multihead_attention
 
 
 class Model(object):
-    def __init__(self, config, devices):
+    def __init__(self, config, num_gpus):
         self.graph = tf.Graph()
         self._config = config
 
-        self._devices = ['/gpu:'+i.strip() for i in devices.split(',') if i] or ['/cpu:0']
+        self._devices = ['/gpu:%d' % i for i in range(num_gpus)] if num_gpus > 0 else ['/cpu:0']
 
         # Placeholders and saver.
         with self.graph.as_default():
