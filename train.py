@@ -1,13 +1,10 @@
-import logging
 import os
 import time
 from argparse import ArgumentParser
-
-import tensorflow as tf
 import yaml
 
 from evaluate import Evaluator
-from model import Transformer
+from model import *
 from utils import DataReader, AttrDict, expand_feed_dict
 
 
@@ -16,7 +13,7 @@ def train(config):
 
     """Train a model with a config file."""
     data_reader = DataReader(config=config)
-    model = Transformer(config=config, num_gpus=config.train.num_gpus)
+    model = eval(config.model)(config=config, num_gpus=config.train.num_gpus)
     model.build_train_model(test=config.train.eval_on_dev)
 
     sess_config = tf.ConfigProto()

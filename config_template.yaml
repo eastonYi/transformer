@@ -1,4 +1,5 @@
 ---
+model: 'Transformer'
 src_vocab:
 dst_vocab:
 src_vocab_size:

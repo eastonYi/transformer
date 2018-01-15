@@ -2,17 +2,15 @@ from __future__ import print_function
 
 import codecs
 import commands
-import logging
 import os
 import time
 from argparse import ArgumentParser
 from tempfile import mkstemp
 
 import numpy as np
-import tensorflow as tf
 import yaml
 
-from model import Transformer
+from model import *
 from utils import DataReader, AttrDict, expand_feed_dict
 
 
@@ -24,8 +22,7 @@ class Evaluator(object):
         pass
 
     def init_from_config(self, config):
-        # self.model = Model(config)
-        self.model = Transformer(config, config.test.num_gpus)
+        self.model = eval(config.model)(config, config.test.num_gpus)
         self.model.build_test_model()
 
         sess_config = tf.ConfigProto()
