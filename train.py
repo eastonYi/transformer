@@ -76,13 +76,13 @@ def train(config):
                 # Save model
                 if config.train.save_freq > 0 and step % config.train.save_freq == 0:
                     maybe_save_model()
+                
+                if config.train.num_steps and step >= config.train.num_steps:
+                    break
 
             # Save model per epoch if config.train.save_freq is less or equal than zero
             if config.train.save_freq <= 0:
                 maybe_save_model()
-
-            if step >= config.train.num_steps:
-                break
 
             # Early stop
             if toleration <= 0:

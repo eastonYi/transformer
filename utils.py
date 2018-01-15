@@ -21,6 +21,8 @@ class AttrDict(dict):
         super(AttrDict, self).__init__(*args, **kwargs)
 
     def __getattr__(self, item):
+        if item not in self:
+            return None
         if type(self[item]) is dict:
             self[item] = AttrDict(self[item])
         return self[item]
