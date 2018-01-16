@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 
 import tensorflow as tf
 from tensorflow.python.ops import init_ops
@@ -27,6 +28,9 @@ class Model(object):
                     dst_pls.append(tf.placeholder(dtype=tf.int32, shape=[None, None], name='dst_pl_{}'.format(i)))
             self.src_pls = tuple(src_pls)
             self.dst_pls = tuple(dst_pls)
+
+        self.encoder_scope = 'encoder'
+        self.decoder_scope = 'decoder'
 
     def prepare_training(self):
         with self.graph.as_default():
@@ -104,7 +108,11 @@ class Model(object):
                         acc, loss = self.train_output(decoder_output, Y, reuse=i > 0 or None)
                         acc_list.append(acc)
                         loss_list.append(loss)
-                        gv_list.append(self._optimizer.compute_gradients(loss))
+
+                        var_list = tf.trainable_variables()
+                        if self._config.train.var_filter:
+                            var_list = [v for v in var_list if re.match(self._config.train.var_filter, v.name)]
+                        gv_list.append(self._optimizer.compute_gradients(loss, var_list=var_list))
 
             self.accuracy = tf.reduce_mean(acc_list)
             self.loss = tf.reduce_mean(loss_list)
@@ -178,17 +186,17 @@ class Model(object):
 
     def encoder(self, encoder_input, is_training, reuse):
         """Encoder."""
-        with tf.variable_scope("encoder", reuse=reuse):
+        with tf.variable_scope(self.encoder_scope, reuse=reuse):
             return self.encoder_impl(encoder_input, is_training)
 
     def decoder(self, decoder_input, encoder_output, is_training, reuse):
         """Decoder"""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope(self.decoder_scope, reuse=reuse):
             return self.decoder_impl(decoder_input, encoder_output, is_training)
 
     def decoder_with_caching(self, decoder_input, decoder_cache, encoder_output, is_training, reuse):
         """Incremental Decoder"""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope(self.decoder_scope, reuse=reuse):
             return self.decoder_with_caching_impl(decoder_input, decoder_cache, encoder_output, is_training)
 
     def beam_search(self, encoder_output, reuse):
@@ -306,7 +314,7 @@ class Model(object):
 
     def test_output(self, decoder_output, reuse):
         """During test, we only need the last prediction at each time."""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope(self.decoder_scope, reuse=reuse):
             last_logits = dense(decoder_output[:,-1], self._config.dst_vocab_size, use_bias=False,
                                 name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
                                 reuse=True if self._config.tie_embedding_and_softmax else None)
@@ -318,7 +326,7 @@ class Model(object):
 
     def test_loss(self, decoder_output, Y, reuse):
         """This function help users to compute PPL during test."""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope(self.decoder_scope, reuse=reuse):
             logits = dense(decoder_output, self._config.dst_vocab_size, use_bias=False,
                            name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
                            reuse=True if self._config.tie_embedding_and_softmax else None)
@@ -330,7 +338,7 @@ class Model(object):
 
     def train_output(self, decoder_output, Y, reuse):
         """Calculate loss and accuracy."""
-        with tf.variable_scope("decoder", reuse=reuse):
+        with tf.variable_scope(self.decoder_scope, reuse=reuse):
             logits = dense(decoder_output, self._config.dst_vocab_size, use_bias=False,
                            name="dst_embedding" if self._config.tie_embedding_and_softmax else "softmax",
                            reuse=True if self._config.tie_embedding_and_softmax else None)
@@ -385,7 +393,7 @@ class Model(object):
 
 class Transformer(Model):
     def __init__(self, *args, **kargs):
-        super(self.__class__, self).__init__(*args, **kargs)
+        super(Transformer, self).__init__(*args, **kargs)
         activations = {"relu": tf.nn.relu,
                        "sigmoid": tf.sigmoid,
                        "tanh": tf.tanh,

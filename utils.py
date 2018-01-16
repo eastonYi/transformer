@@ -8,6 +8,7 @@ from tempfile import mkstemp
 
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.framework as tff
 
 from third_party.tensor2tensor import common_layers, common_attention
 
@@ -295,6 +296,18 @@ def expand_feed_dict(feed_dict):
                 new_feed_dict[p] = v[base: end]
                 base = end
     return new_feed_dict
+
+
+def available_variables(checkpoint_dir):
+    all_vars = tf.global_variables()
+    all_available_vars = tff.list_variables(checkpoint_dir=checkpoint_dir)
+    all_available_vars = dict(all_available_vars)
+    available_vars = []
+    for v in all_vars:
+        vname = v.name.split(':')[0]
+        if vname in all_available_vars and v.get_shape() == all_available_vars[vname]:
+            available_vars.append(v)
+    return available_vars
 
 
 def average_gradients(tower_grads):

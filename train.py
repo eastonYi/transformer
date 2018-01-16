@@ -5,7 +5,7 @@ import yaml
 
 from evaluate import Evaluator
 from model import *
-from utils import DataReader, AttrDict, expand_feed_dict
+from utils import DataReader, AttrDict, available_variables, expand_feed_dict
 
 
 def train(config):
@@ -23,12 +23,20 @@ def train(config):
     summary_writer = tf.summary.FileWriter(config.model_dir, graph=model.graph)
 
     with tf.Session(config=sess_config, graph=model.graph) as sess:
-        try:
-            model.saver.restore(sess, tf.train.latest_checkpoint(config.model_dir))
-        except Exception, e:
-            # Initialize all variables.
-            sess.run(tf.global_variables_initializer())
-            logger.info(e)
+        # Initialize all variables.
+        sess.run(tf.global_variables_initializer())
+        # Reload variables in disk.
+        if tf.train.latest_checkpoint(config.model_dir):
+            available_vars = available_variables(config.model_dir)
+            if available_vars:
+                saver = tf.train.Saver(var_list=available_vars)
+                saver.restore(sess, tf.train.latest_checkpoint(config.model_dir))
+                for v in available_vars:
+                    logger.info('Reload {} from disk.'.format(v.name))
+            else:
+                logger.info('Nothing to be reload from disk.')
+        else:
+            logger.info('Nothing to be reload from disk.')
 
         evaluator = Evaluator()
         evaluator.init_from_existed(model, sess, data_reader)
