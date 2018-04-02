@@ -7,11 +7,12 @@ dst_vocab_size:
 hidden_units: 512
 scale_embedding: True
 tie_embedding_and_softmax: True
+tie_embeddings: False
 attention_dropout_rate: 0.0
 residual_dropout_rate: 0.1
 num_blocks: 6
 num_heads: 8
-ff_activation: 'glu'
+ff_activation: 'relu'
 model_dir:
 train:
     num_gpus: 8

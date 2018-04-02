@@ -3,6 +3,7 @@ from __future__ import print_function
 import codecs
 import logging
 import os
+import time
 from itertools import izip
 from tempfile import mkstemp
 
@@ -23,6 +24,7 @@ class AttrDict(dict):
 
     def __getattr__(self, item):
         if item not in self:
+            logging.warning('{} is not in the dict. None is returned as default.'.format(item))
             return None
         if type(self[item]) is dict:
             self[item] = AttrDict(self[item])
@@ -62,51 +64,10 @@ class DataReader(object):
         self.src2idx, self.idx2src = load_vocab_(self._config.src_vocab, self._config.src_vocab_size)
         self.dst2idx, self.idx2dst = load_vocab_(self._config.dst_vocab, self._config.dst_vocab_size)
 
-    def get_training_batches(self, shuffle=True):
-        """
-        Generate batches with fixed batch size.
-        """
-
-        src_path = self._config.train.src_path
-        dst_path = self._config.train.dst_path
-        batch_size = self._config.train.batch_size
-        max_length = self._config.train.max_length
-
-        # Shuffle the training files.
-        if shuffle:
-            src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
-        else:
-            src_shuf_path = src_path
-            dst_shuf_path = dst_path
-
-        src_sents, dst_sents = [], []
-        for src_sent, dst_sent in izip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
-            src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
-            # If exceed the max length, abandon this sentence pair.
-            src_sent = src_sent.split()
-            dst_sent = dst_sent.split()
-            if len(src_sent) > max_length or len(dst_sent) > max_length:
-                continue
-            src_sents.append(src_sent)
-            dst_sents.append(dst_sent)
-            # Create a padded batch.
-            if len(src_sents) >= batch_size:
-                yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
-                src_sents, dst_sents = [], []
-
-        if src_sents and dst_sents:
-            yield self.create_batch(src_sents, o='src'), self.create_batch(dst_sents, o='dst')
-
-        # Remove shuffled files when epoch finished.
-        if shuffle:
-            os.remove(src_shuf_path)
-            os.remove(dst_shuf_path)
-
-    def get_training_batches_with_buckets(self, shuffle=True):
+    def get_training_batches(self, shuffle=True, epoches=None):
         """
         Generate batches according to bucket setting.
         """
-
         buckets = [(i, i) for i in range(5, 1000000, 3)]
 
         def select_bucket(sl, dl):
@@ -120,59 +81,69 @@ class DataReader(object):
         dst_path = self._config.train.dst_path
         max_length = self._config.train.max_length
 
-        if shuffle:
-            logging.debug('Shuffle files %s and %s.' % (src_path, dst_path))
-            src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
-            self._tmps.add(src_shuf_path)
-            self._tmps.add(dst_shuf_path)
-        else:
-            src_shuf_path = src_path
-            dst_shuf_path = dst_path
+        epoch = [0]
 
-        caches = {}
-        for bucket in buckets:
-            caches[bucket] = [[], [], 0, 0]  # src sentences, dst sentences, src tokens, dst tokens
+        def stop_condition():
+            if epoches is None:
+                return True
+            else:
+                epoch[0] += 1
+                return epoch[0] < epoches + 1
 
-        for src_sent, dst_sent in izip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
-            src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
+        while stop_condition():
+            if shuffle:
+                logging.debug('Shuffle files %s and %s.' % (src_path, dst_path))
+                src_shuf_path, dst_shuf_path = self.shuffle([src_path, dst_path])
+                self._tmps.add(src_shuf_path)
+                self._tmps.add(dst_shuf_path)
+            else:
+                src_shuf_path = src_path
+                dst_shuf_path = dst_path
 
-            src_sent = src_sent.split()
-            dst_sent = dst_sent.split()
+            caches = {}
+            for bucket in buckets:
+                caches[bucket] = [[], [], 0, 0]  # src sentences, dst sentences, src tokens, dst tokens
 
-            if len(src_sent) > max_length or len(dst_sent) > max_length:
-                continue
+            for src_sent, dst_sent in izip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
+                src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
 
-            bucket = select_bucket(len(src_sent), len(dst_sent))
-            if bucket is None:  # No bucket is selected when the sentence length exceed the max length.
-                continue
+                src_sent = src_sent.split()
+                dst_sent = dst_sent.split()
 
-            caches[bucket][0].append(src_sent)
-            caches[bucket][1].append(dst_sent)
-            caches[bucket][2] += len(src_sent)
-            caches[bucket][3] += len(dst_sent)
+                if len(src_sent) > max_length or len(dst_sent) > max_length:
+                    continue
 
-            if max(caches[bucket][2], caches[bucket][3]) >= self._config.train.tokens_per_batch:
-                batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
-                logging.debug(
-                    'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
-                yield batch
-                caches[bucket] = [[], [], 0, 0]
+                bucket = select_bucket(len(src_sent), len(dst_sent))
+                if bucket is None:  # No bucket is selected when the sentence length exceed the max length.
+                    continue
 
-        # Clean remain sentences.
-        for bucket in buckets:
-            # Ensure each device at least get one sample.
-            if len(caches[bucket][0]) >= max(1, self._config.train.num_gpus):
-                batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
-                logging.debug(
-                    'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
-                yield batch
+                caches[bucket][0].append(src_sent)
+                caches[bucket][1].append(dst_sent)
+                caches[bucket][2] += len(src_sent)
+                caches[bucket][3] += len(dst_sent)
 
-        # Remove shuffled files when epoch finished.
-        if shuffle:
-            os.remove(src_shuf_path)
-            os.remove(dst_shuf_path)
-            self._tmps.remove(src_shuf_path)
-            self._tmps.remove(dst_shuf_path)
+                if max(caches[bucket][2], caches[bucket][3]) >= self._config.train.tokens_per_batch:
+                    batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
+                    logging.debug(
+                        'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
+                    yield batch
+                    caches[bucket] = [[], [], 0, 0]
+
+            # Clean remain sentences.
+            for bucket in buckets:
+                # Ensure each device at least get one sample.
+                if len(caches[bucket][0]) >= max(1, self._config.train.num_gpus):
+                    batch = (self.create_batch(caches[bucket][0], o='src'), self.create_batch(caches[bucket][1], o='dst'))
+                    logging.debug(
+                        'Yield batch with source shape %s and target shape %s.' % (batch[0].shape, batch[1].shape))
+                    yield batch
+
+            # Remove shuffled files when epoch finished.
+            if shuffle:
+                os.remove(src_shuf_path)
+                os.remove(dst_shuf_path)
+                self._tmps.remove(src_shuf_path)
+                self._tmps.remove(dst_shuf_path)
 
     @staticmethod
     def shuffle(list_of_files):
@@ -190,7 +161,7 @@ class DataReader(object):
 
         os.system('shuf %s > %s' % (tpath, tpath + '.shuf'))
 
-        fnames = ['/tmp/{}.{}.shuf'.format(i, os.getpid()) for i, ff in enumerate(list_of_files)]
+        fnames = ['/tmp/{}.{}.{}.shuf'.format(i, os.getpid(), time.time()) for i, ff in enumerate(list_of_files)]
         fds = [open(fn, 'w') for fn in fnames]
 
         for l in open(tpath + '.shuf'):
@@ -375,11 +346,14 @@ def shift_right(input, pad=2):
     return tf.concat((tf.ones_like(input[:, :1]) * pad, input[:, :-1]), 1)
 
 
-def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
+def embedding(x, vocab_size, dense_size, name=None, reuse=None, kernel=None, multiplier=1.0):
     """Embed x of type int64 into dense vectors."""
     with tf.variable_scope(
         name, default_name="embedding", values=[x], reuse=reuse):
-        embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
+        if kernel:
+            embedding_var = kernel
+        else:
+            embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
         output = tf.gather(embedding_var, x)
         if multiplier != 1.0:
             output *= multiplier
@@ -390,7 +364,7 @@ def dense(inputs,
           output_size,
           activation=tf.identity,
           use_bias=True,
-          reuse_kernel=None,
+          kernel=None,
           reuse=None,
           name=None):
     argcount = activation.func_code.co_argcount
@@ -402,8 +376,11 @@ def dense(inputs,
             input_size = inputs.get_shape().as_list()[-1]
             inputs_shape = tf.unstack(tf.shape(inputs))
             inputs = tf.reshape(inputs, [-1, input_size])
-            with tf.variable_scope(tf.get_variable_scope(), reuse=reuse_kernel):
-                w = tf.get_variable("kernel", [output_size, input_size])
+            if kernel:
+                w = kernel
+            else:
+                with tf.variable_scope(tf.get_variable_scope()):
+                    w = tf.get_variable("kernel", [output_size, input_size])
             outputs = tf.matmul(inputs, w, transpose_b=True)
             if use_bias:
                 b = tf.get_variable("bias", [output_size], initializer=tf.zeros_initializer)

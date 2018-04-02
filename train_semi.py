@@ -5,7 +5,7 @@ import yaml
 
 from evaluate import Evaluator
 from model import *
-from utils import DataReader, AttrDict, available_variables, expand_feed_dict
+from utils import DataReader3, AttrDict, available_variables, expand_feed_dict
 
 
 class BreakLoopException(Exception):
@@ -16,12 +16,12 @@ def train(config):
     logger = logging.getLogger('')
 
     """Train a model with a config file."""
-    data_reader = DataReader(config=config)
+    data_reader = DataReader3(config=config)
     model = eval(config.model)(config=config, num_gpus=config.train.num_gpus)
     model.build_train_model(test=config.train.eval_on_dev)
 
     train_op, loss_op = model.get_train_op(name=None)
-    global_saver = tf.train.Saver()
+    slm_train_op, slm_loss_op = model.get_train_op(name='slm_loss', increase_global_step=False)
 
     sess_config = tf.ConfigProto()
     sess_config.gpu_options.allow_growth = True
@@ -52,8 +52,7 @@ def train(config):
         dev_bleu = evaluator.evaluate(**config.dev) if config.train.eval_on_dev else 0
         toleration = config.train.toleration
 
-        def train_one_step(batch, loss_op, train_op):
-            feed_dict = expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]})
+        def train_one_step(loss_op, train_op, feed_dict):
             step, lr, loss, _ = sess.run(
                 [model.global_step, model.learning_rate,
                  loss_op, train_op],
@@ -68,7 +67,7 @@ def train(config):
 
             def save():
                 mp = config.model_dir + '/model_step_{}'.format(step)
-                global_saver.save(sess, mp)
+                model.saver.save(sess, mp)
                 logger.info('Save model in %s.' % mp)
 
             if config.train.eval_on_dev:
@@ -87,15 +86,28 @@ def train(config):
 
         try:
             step = 0
+            unlabeled_batches = data_reader.get_unlabeled_source_batches(epoches=None)
             for epoch in range(1, config.train.num_epochs+1):
                 for batch in data_reader.get_training_batches(epoches=1):
 
                     # Train normal instances.
                     start_time = time.time()
-                    step, lr, loss = train_one_step(batch, loss_op, train_op)
+                    feed_dict = expand_feed_dict({model.src_pls: batch[0], model.dst_pls: batch[1]})
+                    step, lr, loss = train_one_step(loss_op, train_op, feed_dict)
+
                     logger.info(
                         'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tloss: {3:.4f}\ttime: {4:.4f}'.
                         format(epoch, step, lr, loss, time.time() - start_time))
+
+                    # Semi-supervised
+                    if random.random() < 0.1:
+                        batch = unlabeled_batches.next()
+                        feed_dict = expand_feed_dict({model.src_pls: batch})
+                        step, lr, loss = train_one_step(slm_loss_op, slm_train_op, feed_dict)
+                        logger.info(
+                            'epoch: {0}\tstep: {1}\tlr: {2:.6f}\tslm_loss: {3:.4f}\ttime: {4:.4f}'.
+                            format(epoch, step, lr, loss, time.time() - start_time))
+
                     # Save model
                     if config.train.save_freq > 0 and step % config.train.save_freq == 0:
                         maybe_save_model()
@@ -109,8 +121,8 @@ def train(config):
                 # Save model per epoch if config.train.save_freq is less or equal than zero
                 if config.train.save_freq <= 0:
                     maybe_save_model()
-        except BreakLoopException as e:
-            logger.info(e)
+        except BreakLoopException:
+            pass
 
         logger.info("Finish training.")
 
