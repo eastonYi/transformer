@@ -350,7 +350,7 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, kernel=None, mul
     """Embed x of type int64 into dense vectors."""
     with tf.variable_scope(
         name, default_name="embedding", values=[x], reuse=reuse):
-        if kernel:
+        if kernel is not None:
             embedding_var = kernel
         else:
             embedding_var = tf.get_variable("kernel", [vocab_size, dense_size])
@@ -376,7 +376,8 @@ def dense(inputs,
             input_size = inputs.get_shape().as_list()[-1]
             inputs_shape = tf.unstack(tf.shape(inputs))
             inputs = tf.reshape(inputs, [-1, input_size])
-            if kernel:
+            if kernel is not None:
+                assert kernel.get_shape().as_list()[0] == output_size
                 w = kernel
             else:
                 with tf.variable_scope(tf.get_variable_scope()):
@@ -463,3 +464,93 @@ def multihead_attention(query_antecedent,
         x = common_attention.combine_heads(x)
         x = dense(x, output_depth, name="output_transform")
         return x
+
+
+class AttentionGRUCell(tf.nn.rnn_cell.GRUCell):
+    def __init__(self,
+                 num_units,
+                 attention_memories,
+                 attention_bias=None,
+                 activation=None,
+                 reuse=None,
+                 kernel_initializer=None,
+                 bias_initializer=None,
+                 name=None):
+        super(AttentionGRUCell, self).__init__(
+            num_units=num_units,
+            activation=activation,
+            reuse=reuse,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            name=name)
+        with tf.variable_scope(name, "AttentionGRUCell", reuse=reuse):
+            self._attention_keys = dense(attention_memories, num_units, name='attention_key')
+            self._attention_values = dense(attention_memories, num_units, name='attention_value')
+        self._attention_bias = attention_bias
+
+    def attention(self, inputs, state):
+        attention_query = tf.matmul(
+            tf.concat([inputs, state], 1), self._attention_query_kernel)
+        attention_query = tf.nn.bias_add(attention_query, self._attention_query_bias)
+
+        alpha = tf.tanh(attention_query[:, None, :] + self._attention_keys)
+        alpha = dense(alpha, 1, kernel=self._alpha_kernel, name='attention')
+        if self._attention_bias is not None:
+            alpha += self._attention_bias
+        alpha = tf.nn.softmax(alpha, axis=1)
+
+        context = tf.multiply(self._attention_values, alpha)
+        context = tf.reduce_sum(context, axis=1)
+
+        return context
+
+    def call(self, inputs, state):
+        context = self.attention(inputs, state)
+        inputs = tf.concat([inputs, context], axis=1)
+        return super(AttentionGRUCell, self).call(inputs, state)
+
+    def build(self, inputs_shape):
+        if inputs_shape[-1].value is None:
+            raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
+                             % inputs_shape)
+
+        input_depth = inputs_shape[-1].value
+        self._gate_kernel = self.add_variable(
+            "gates/weights",
+            shape=[input_depth + 2 * self._num_units, 2 * self._num_units],
+            initializer=self._kernel_initializer)
+        self._gate_bias = self.add_variable(
+            "gates/bias",
+            shape=[2 * self._num_units],
+            initializer=(
+                self._bias_initializer
+                if self._bias_initializer is not None
+                else tf.constant_initializer(1.0, dtype=self.dtype)))
+        self._candidate_kernel = self.add_variable(
+            "candidate/weights",
+            shape=[input_depth + 2 * self._num_units, self._num_units],
+            initializer=self._kernel_initializer)
+        self._candidate_bias = self.add_variable(
+            "candidate/bias",
+            shape=[self._num_units],
+            initializer=(
+                self._bias_initializer
+                if self._bias_initializer is not None
+                else tf.zeros_initializer(dtype=self.dtype)))
+
+        self._attention_query_kernel = self.add_variable(
+            "attention_query/weight",
+            shape=[input_depth + self._num_units, self._num_units],
+            initializer=self._kernel_initializer)
+        self._attention_query_bias = self.add_variable(
+            "attention_query/bias",
+            shape=[self._num_units],
+            initializer=(
+                self._bias_initializer
+                if self._bias_initializer is not None
+                else tf.constant_initializer(1.0, dtype=self.dtype)))
+        self._alpha_kernel = self.add_variable(
+            'alpha_kernel',
+            shape=[1, self._num_units],
+            initializer=self._kernel_initializer)
+        self.built = True

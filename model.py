@@ -1,13 +1,13 @@
 import logging
 import random
 from collections import defaultdict
-
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import init_ops
 
 import third_party.tensor2tensor.common_attention as common_attention
 import third_party.tensor2tensor.common_layers as common_layers
-from utils import average_gradients, shift_right, embedding, residual, dense, ff_hidden
+from utils import average_gradients, shift_right, embedding, residual, dense, ff_hidden, AttentionGRUCell
 from utils import learning_rate_decay, multihead_attention
 
 common_layers.allow_defun = False
@@ -40,15 +40,21 @@ class Model(object):
 
         self.prepare_shared_weights()
 
+        self._use_cache = True
+        self._use_daisy_chain_getter = True
+
     def prepare_shared_weights(self):
 
         def get_weights(name, shape, partitions=16):
             vocab_size, hidden_size = shape
-            part_size = (vocab_size + partitions - 1) % partitions
+            inter_points = np.linspace(0, vocab_size, partitions+1, dtype=np.int)
             parts = []
-            for i in xrange(partitions):
-                parts.append(tf.get_variable(name=name + '_' + str(i), shape=[part_size, hidden_size]))
-            return tf.concat(parts, 0, name)
+            pre_point = 0
+            for i, p in enumerate(inter_points[1:]):
+                parts.append(tf.get_variable(name=name + '_' + str(i),
+                                             shape=[p - pre_point, hidden_size]))
+                pre_point = p
+            return common_layers.eu.ConvertGradientToTensor(tf.concat(parts, 0, name))
 
         src_embedding = get_weights('src_embedding',
                                     shape=[self._config.src_vocab_size, self._config.hidden_units])
@@ -134,10 +140,11 @@ class Model(object):
                 return device
 
             device_setter = balanced_device_setter
+            custom_getter = daisy_chain_getter if self._use_daisy_chain_getter else None
 
             with tf.variable_scope(tf.get_variable_scope(),
                                    initializer=self._initializer,
-                                   custom_getter=daisy_chain_getter,
+                                   custom_getter=custom_getter,
                                    reuse=reuse):
                 with tf.device(device_setter):
                     logging.info('Build model on %s.' % device)
@@ -166,7 +173,7 @@ class Model(object):
 
                     def true_fn():
                         enc_output = self.encoder(X, is_training=False, reuse=i > 0 or None)
-                        prediction = self.beam_search(enc_output, reuse=i > 0 or None)
+                        prediction = self.beam_search(enc_output, use_cache=self._use_cache, reuse=i > 0 or None)
                         dec_output = self.decoder(dec_input, enc_output, is_training=False, reuse=True)
                         loss = self.test_loss(dec_output, Y, reuse=True)
                         return prediction, loss
@@ -247,7 +254,7 @@ class Model(object):
         with tf.variable_scope(self.decoder_scope, reuse=reuse):
             return self.decoder_with_caching_impl(decoder_input, decoder_cache, encoder_output, is_training)
 
-    def beam_search(self, encoder_output, reuse):
+    def beam_search(self, encoder_output, use_cache, reuse):
         """Beam search in graph."""
         beam_size, batch_size = self._config.test.beam_size, tf.shape(encoder_output)[0]
         inf = 1e10
@@ -293,14 +300,23 @@ class Model(object):
         scores = tf.tile(scores, multiples=[batch_size])   # [batch_size * beam_size]
         lengths = tf.zeros([batch_size * beam_size], dtype=tf.float32)
         bias = tf.zeros_like(scores, dtype=tf.bool)
-        cache = tf.zeros([batch_size * beam_size, 0, self._config.num_blocks, self._config.hidden_units])
+
+        if use_cache:
+            cache = tf.zeros([batch_size * beam_size, 0, self._config.num_blocks, self._config.hidden_units])
+        else:
+            cache = tf.zeros([0, 0, 0, 0])
 
         def step(i, bias, preds, scores, lengths, cache):
             # Where are we.
             i += 1
 
             # Call decoder and get predictions.
-            decoder_output, cache = self.decoder_with_caching(preds, cache, encoder_output, is_training=False, reuse=reuse)
+            if use_cache:
+                decoder_output, cache = \
+                    self.decoder_with_caching(preds, cache, encoder_output, is_training=False, reuse=reuse)
+            else:
+                decoder_output = self.decoder(preds, encoder_output, is_training=False, reuse=reuse)
+
             _, next_preds, next_scores = self.test_output(decoder_output, reuse=reuse)
 
             next_preds = get_bias_preds(next_preds, bias)
@@ -333,7 +349,8 @@ class Model(object):
             # Update predictions.
             next_preds = tf.gather(tf.reshape(next_preds, shape=[-1]), indices=k_indices)
             preds = tf.gather(preds, indices=k_indices/beam_size)
-            cache = tf.gather(cache, indices=k_indices/beam_size)
+            if use_cache:
+                cache = tf.gather(cache, indices=k_indices/beam_size)
             preds = tf.concat((preds, next_preds[:, None]), axis=1)  # [batch_size * beam_size, i]
 
             # Whether sequences finished.
@@ -392,7 +409,7 @@ class Model(object):
                            kernel=self._dst_softmax, name="decoder", reuse=None)
             mask = tf.to_float(tf.not_equal(Y, 0))
             labels = tf.one_hot(Y, depth=self._config.dst_vocab_size)
-            loss = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+            loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels)
             loss_sum = tf.reduce_sum(loss * mask)
         return loss_sum
 
@@ -474,7 +491,6 @@ class Transformer(Model):
 
         # Mask
         encoder_padding = tf.equal(encoder_input, 0)
-
         encoder_attention_bias = common_attention.attention_bias_ignore_padding(encoder_padding)
         # encoder_attention_bias = tf.tile(encoder_attention_bias,
         #                                  [1, self._config.num_heads, tf.shape(encoder_attention_bias)[-1], 1])
@@ -666,3 +682,96 @@ class Transformer(Model):
         new_cache = tf.concat(new_cache, axis=2)  # [batch_size, n_step, num_blocks, num_hidden]
 
         return decoder_output, new_cache
+
+
+class RNNSearch(Model):
+    def __init__(self, *args, **kargs):
+        super(RNNSearch, self).__init__(*args, **kargs)
+        self._use_daisy_chain_getter = False
+
+    def encoder_impl(self, encoder_input, is_training):
+        dropout_rate = self._config.dropout_rate if is_training else 0.0
+
+        # Mask
+        encoder_mask = tf.to_int32(tf.not_equal(encoder_input, 0))
+        sequence_lengths = tf.reduce_sum(encoder_mask, axis=1)
+
+        # Embedding
+        encoder_output = embedding(encoder_input,
+                                   vocab_size=self._config.src_vocab_size,
+                                   dense_size=self._config.hidden_units,
+                                   kernel=self._src_embedding,
+                                   multiplier=self._config.hidden_units**0.5 if self._config.scale_embedding else 1.0,
+                                   name="src_embedding")
+
+        # Dropout
+        encoder_output = tf.layers.dropout(encoder_output, rate=dropout_rate, training=is_training)
+
+        cell_fw = tf.nn.rnn_cell.GRUCell(num_units=self._config.hidden_units, name='fw_cell')
+        cell_bw = tf.nn.rnn_cell.GRUCell(num_units=self._config.hidden_units, name='bw_cell')
+
+        # RNN
+        encoder_outputs, _ = tf.nn.bidirectional_dynamic_rnn(
+            cell_fw=cell_fw, cell_bw=cell_bw,
+            inputs=encoder_output,
+            sequence_length=sequence_lengths,
+            dtype=tf.float32
+        )
+
+        encoder_output = tf.concat(encoder_outputs, axis=2)
+
+        # Dropout
+        encoder_output = tf.layers.dropout(encoder_output, rate=dropout_rate, training=is_training)
+
+        # Mask
+        encoder_output *= tf.expand_dims(tf.to_float(encoder_mask), axis=-1)
+
+        return encoder_output
+
+    def decoder_impl(self, decoder_input, encoder_output, is_training):
+
+        dropout_rate = self._config.dropout_rate if is_training else 0.0
+
+        attention_bias = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1, keepdims=True), 0.0)
+        attention_bias = tf.to_float(attention_bias) * (- 1e9)
+
+        decoder_output = embedding(decoder_input,
+                                   vocab_size=self._config.dst_vocab_size,
+                                   dense_size=self._config.hidden_units,
+                                   kernel=self._dst_embedding,
+                                   multiplier=self._config.hidden_units ** 0.5 if self._config.scale_embedding else 1.0,
+                                   name="dst_embedding")
+        decoder_output = tf.layers.dropout(decoder_output, rate=dropout_rate, training=is_training)
+        cell = AttentionGRUCell(num_units=self._config.hidden_units,
+                                attention_memories=encoder_output,
+                                attention_bias=attention_bias,
+                                reuse=tf.AUTO_REUSE,
+                                name='attention_cell')
+        decoder_output, _ = tf.nn.dynamic_rnn(cell=cell, inputs=decoder_output, dtype=tf.float32)
+        decoder_output = tf.layers.dropout(decoder_output, rate=dropout_rate, training=is_training)
+
+        return decoder_output
+
+    def decoder_with_caching_impl(self, decoder_input, decoder_cache, encoder_output, is_training):
+        dropout_rate = self._config.dropout_rate if is_training else 0.0
+        decoder_input = decoder_input[:, -1]
+        attention_bias = tf.equal(tf.reduce_sum(tf.abs(encoder_output), axis=-1, keepdims=True), 0.0)
+        attention_bias = tf.to_float(attention_bias) * (- 1e9)
+        decoder_output = embedding(decoder_input,
+                                   vocab_size=self._config.dst_vocab_size,
+                                   dense_size=self._config.hidden_units,
+                                   kernel=self._dst_embedding,
+                                   multiplier=self._config.hidden_units ** 0.5 if self._config.scale_embedding else 1.0,
+                                   name="dst_embedding")
+        cell = AttentionGRUCell(num_units=self._config.hidden_units,
+                                attention_memories=encoder_output,
+                                attention_bias=attention_bias,
+                                reuse=tf.AUTO_REUSE,
+                                name='attention_cell')
+        decoder_cache = tf.cond(tf.equal(tf.shape(decoder_cache)[1], 0),
+                                lambda: tf.zeros([tf.shape(decoder_input)[0], 1, 1, self._config.hidden_units]),
+                                lambda: decoder_cache)
+        with tf.variable_scope('rnn'):
+            decoder_output, _ = cell(decoder_output, decoder_cache[:, -1, -1, :])
+        decoder_output = tf.layers.dropout(decoder_output, rate=dropout_rate, training=is_training)
+        return decoder_output[:, None, :], decoder_output[:, None, None, :]

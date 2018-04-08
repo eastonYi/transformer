@@ -28,14 +28,82 @@ class Evaluator(object):
         sess_config = tf.ConfigProto()
         sess_config.gpu_options.allow_growth = True
         sess_config.allow_soft_placement = True
-        self.sess = tf.Session(config=sess_config, graph=self.model.graph)
+        self.sess = tf.Session(config=sess_config)
+
         # Restore model.
-        self.model.saver.restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
+        tf.train.Saver().restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
 
         self.data_reader = DataReader(config)
 
+    def init_from_frozen_graphdef(self, config):
+        frozen_graph_path = os.path.join(config.model_dir, 'frozen_graph.pb')
+        # If the file doesn't existed, create it.
+        if not os.path.exists(frozen_graph_path):
+            logging.info('The frozen graph does not existed, use \'init_from_config\' instead'
+                         'and create a frozen graph for next use.')
+            self.init_from_config(config)
+            saver = tf.train.Saver()
+            save_dir = '/tmp/graph-{}'.format(os.getpid())
+            os.mkdir(save_dir)
+            save_path = '{}/ckpt'.format(save_dir)
+            saver.save(sess=self.sess, save_path=save_path)
+
+            with tf.Session(graph=tf.Graph()) as sess:
+                clear_devices = True
+                output_node_names = ['loss_sum', 'prediction']
+                # We import the meta graph in the current default Graph
+                saver = tf.train.import_meta_graph(save_path + '.meta', clear_devices=clear_devices)
+
+                # We restore the weights
+                saver.restore(sess, save_path)
+
+                # We use a built-in TF helper to export variables to constants
+                output_graph_def = tf.graph_util.convert_variables_to_constants(
+                    sess,  # The session is used to retrieve the weights
+                    tf.get_default_graph().as_graph_def(),  # The graph_def is used to retrieve the nodes
+                    output_node_names  # The output node names are used to select the useful nodes
+                )
+
+                # Finally we serialize and dump the output graph to the filesystem
+                with tf.gfile.GFile(frozen_graph_path, "wb") as f:
+                    f.write(output_graph_def.SerializeToString())
+                    logging.info("%d ops in the final graph." % len(output_graph_def.node))
+
+                # Remove temp files.
+                os.system('rm -rf ' + save_dir)
+        else:
+            sess_config = tf.ConfigProto()
+            sess_config.gpu_options.allow_growth = True
+            sess_config.allow_soft_placement = True
+            self.sess = tf.Session(config=sess_config)
+            self.data_reader = DataReader(config)
+
+            # We load the protobuf file from the disk and parse it to retrieve the
+            # unserialized graph_def
+            with tf.gfile.GFile(frozen_graph_path, "rb") as f:
+                graph_def = tf.GraphDef()
+                graph_def.ParseFromString(f.read())
+
+            # Import the graph_def into current the default graph.
+            tf.import_graph_def(graph_def)
+            graph = tf.get_default_graph()
+            self.model = AttrDict()
+
+            def collect_placeholders(prefix):
+                ret = []
+                idx = 0
+                while True:
+                    try:
+                        ret.append(graph.get_tensor_by_name('import/{}_{}:0'.format(prefix, idx)))
+                        idx += 1
+                    except KeyError:
+                        return tuple(ret)
+
+            self.model['src_pls'] = collect_placeholders('src_pl')
+            self.model['dst_pls'] = collect_placeholders('dst_pl')
+            self.model['prediction'] = graph.get_tensor_by_name('import/prediction:0')
+
     def init_from_existed(self, model, sess, data_reader):
-        assert model.graph == sess.graph
         self.sess = sess
         self.model = model
         self.data_reader = data_reader
@@ -89,15 +157,18 @@ class Evaluator(object):
         output_path = kargs['output_path']
         cmd = kargs['cmd'] if 'cmd' in kargs else\
             "perl multi-bleu.perl {ref} < {output} 2>/dev/null | awk '{{print($3)}}' | awk -F, '{{print $1}}'"
+        cmd = cmd.strip()
+        logging.info('Evaluation command: ' + cmd)
         self.translate(src_path, output_path, batch_size)
+        bleu = None
         if 'ref_path' in kargs:
             ref_path = kargs['ref_path']
             bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
             logging.info('BLEU: {}'.format(bleu))
-            return float(bleu)
+            bleu = float(bleu)
         if 'dst_path' in kargs:
             self.ppl(src_path, kargs['dst_path'], batch_size)
-        return None
+        return bleu
 
 
 if __name__ == '__main__':
@@ -109,7 +180,8 @@ if __name__ == '__main__':
     # Logger
     logging.basicConfig(level=logging.INFO)
     evaluator = Evaluator()
-    evaluator.init_from_config(config)
+    # evaluator.init_from_config(config)
+    evaluator.init_from_frozen_graphdef(config)
     for attr in config.test:
         if attr.startswith('set'):
             evaluator.evaluate(config.test.batch_size, **config.test[attr])
