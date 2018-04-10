@@ -592,8 +592,6 @@ class IndRNNCell(tf.nn.rnn_cell.RNNCell):
         epsilon = np.power(2.0, 1.0/50.0)
         self._recurrent_kernel = tf.clip_by_value(self._recurrent_kernel, -epsilon, epsilon)
 
-        tf.summary.histogram('recurrent_weights_{}'.format(self.name), self._recurrent_kernel)
-
         self._input_kernel = self.add_variable(
             "input/weights",
             shape=[input_depth, self._num_units],

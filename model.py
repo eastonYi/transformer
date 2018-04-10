@@ -804,17 +804,19 @@ class DeepRNN(RNNSearch):
         # Bi-directional RNN
         cell_fw = IndRNNCell(num_units=self._config.hidden_units, name='fw_cell_0')
         cell_bw = IndRNNCell(num_units=self._config.hidden_units, name='bw_cell_1')
+
         encoder_outputs, _ = tf.nn.bidirectional_dynamic_rnn(
             cell_fw=cell_fw, cell_bw=cell_bw,
             inputs=encoder_output,
             sequence_length=sequence_lengths,
             dtype=tf.float32
         )
+
         encoder_output = tf.concat(encoder_outputs, axis=2)
         encoder_output = dense(encoder_output, output_size=self._config.hidden_units)
         # encoder_output = tf.layers.dropout(encoder_output, rate=residual_dropout_rate, training=is_training)
 
-        recurrent_initializer = tf.random_normal_initializer(1.0)
+        recurrent_initializer = tf.random_uniform_initializer(1.0)
         for i in xrange(2, self._config.num_blocks):
             encoder_output = tf.layers.batch_normalization(encoder_output, training=is_training, name='BN_%d' % i)
 
@@ -847,7 +849,7 @@ class DeepRNN(RNNSearch):
                                    name="dst_embedding")
         # decoder_output = tf.layers.dropout(decoder_output, rate=residual_dropout_rate, training=is_training)
 
-        recurrent_initializer = tf.random_normal_initializer(1.0)
+        recurrent_initializer = tf.random_uniform_initializer(1.0)
         for i in xrange(self._config.num_blocks):
             decoder_output = tf.layers.batch_normalization(decoder_output, training=is_training, name='BN_%d' % i)
 
@@ -863,6 +865,7 @@ class DeepRNN(RNNSearch):
                                   recurrent_initializer=recurrent_initializer,
                                   reuse=tf.AUTO_REUSE,
                                   name='cell_%s' % i)
+
             decoder_output, _ = tf.nn.dynamic_rnn(cell=cell, inputs=decoder_output, dtype=tf.float32, scope='rnn_%d' % i)
             # decoder_output = tf.layers.dropout(decoder_output, rate=residual_dropout_rate, training=is_training)
 
@@ -894,7 +897,7 @@ class DeepRNN(RNNSearch):
         # Unstack cache
         states = tf.unstack(decoder_cache[:, -1, :, :], num=self._config.num_blocks, axis=1)
         new_states = []
-        recurrent_initializer = tf.random_normal_initializer(1.0)
+        recurrent_initializer = tf.random_uniform_initializer(1.0)
         for i in xrange(self._config.num_blocks):
             decoder_output = tf.layers.batch_normalization(decoder_output, training=is_training, name='BN_%d' % i)
             if i % 3 == 0:
