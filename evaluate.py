@@ -120,6 +120,7 @@ class Evaluator(object):
         fd = codecs.open(tmp, 'w', 'utf8')
         count = 0
         token_count = 0
+        epsilon = 1e-6
         start = time.time()
         for X in self.data_reader.get_test_batches(src_path, batch_size):
             Y = self.beam_search(X)
@@ -131,7 +132,7 @@ class Evaluator(object):
             token_count += np.sum(np.not_equal(Y, 3))  # 3: </s>
             time_span = time.time() - start
             logging.info('{0} sentences ({1} tokens) processed in {2:.2f} minutes (speed: {3:.4f} sec/token).'.
-                         format(count, token_count, time_span / 60, time_span / token_count))
+                         format(count, token_count, time_span / 60, time_span / (token_count + epsilon)))
         fd.close()
         # Remove BPE flag, if have.
         os.system("sed -r 's/(@@ )|(@@ ?$)//g' %s > %s" % (tmp, output_path))
@@ -163,9 +164,13 @@ class Evaluator(object):
         bleu = None
         if 'ref_path' in kargs:
             ref_path = kargs['ref_path']
-            bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
+            try:
+                bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
+                bleu = float(bleu)
+            except ValueError, e:
+                logging.warning('An error raised when calculate BLEU: {}'.format(e))
+                bleu = 0
             logging.info('BLEU: {}'.format(bleu))
-            bleu = float(bleu)
         if 'dst_path' in kargs:
             self.ppl(src_path, kargs['dst_path'], batch_size)
         return bleu

@@ -10,6 +10,7 @@ from tempfile import mkstemp
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.framework as tff
+from tensorflow.python.layers import base as base_layer
 
 from third_party.tensor2tensor import common_layers, common_attention
 
@@ -514,7 +515,7 @@ class AttentionGRUCell(tf.nn.rnn_cell.GRUCell):
             raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
                              % inputs_shape)
 
-        input_depth = inputs_shape[-1].value
+        input_depth = inputs_shape[1].value
         self._gate_kernel = self.add_variable(
             "gates/weights",
             shape=[input_depth + 2 * self._num_units, 2 * self._num_units],
@@ -554,3 +555,137 @@ class AttentionGRUCell(tf.nn.rnn_cell.GRUCell):
             shape=[1, self._num_units],
             initializer=self._kernel_initializer)
         self.built = True
+
+
+class IndRNNCell(tf.nn.rnn_cell.RNNCell):
+    """The independent RNN cell."""
+
+    def __init__(self, num_units, recurrent_initializer=None, reuse=None, name=None):
+        super(IndRNNCell, self).__init__(_reuse=reuse, name=name)
+
+        # Inputs must be 2-dimensional.
+        self.input_spec = base_layer.InputSpec(ndim=2)
+
+        self._num_units = num_units
+        self._recurrent_initializer = recurrent_initializer
+        self._kernel_initializer = None
+        self._bias_initializer = tf.constant_initializer(0.0, dtype=tf.float32)
+
+    @property
+    def state_size(self):
+        return self._num_units
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def build(self, inputs_shape):
+        if inputs_shape[1].value is None:
+            raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
+                             % inputs_shape)
+
+        input_depth = inputs_shape[1].value
+        self._recurrent_kernel = self.add_variable(
+            "recurrent/weights",
+            shape=[self._num_units],
+            initializer=self._recurrent_initializer)
+        epsilon = np.power(2.0, 1.0/50.0)
+        self._recurrent_kernel = tf.clip_by_value(self._recurrent_kernel, -epsilon, epsilon)
+
+        tf.summary.histogram('recurrent_weights_{}'.format(self.name), self._recurrent_kernel)
+
+        self._input_kernel = self.add_variable(
+            "input/weights",
+            shape=[input_depth, self._num_units],
+            initializer=self._kernel_initializer)
+
+        self._bias = self.add_variable(
+            "bias",
+            shape=[self._num_units],
+            initializer=self._bias_initializer)
+
+        self.built = True
+
+    def call(self, inputs, state):
+        inputs = tf.matmul(inputs, self._input_kernel)
+        state = tf.multiply(state, self._recurrent_kernel)
+        output = inputs + state
+        output = tf.nn.bias_add(output, self._bias)
+        output = tf.nn.relu(output)
+        return output, output
+
+
+class AttentionIndRNNCell(IndRNNCell):
+    def __init__(self,
+                 num_units,
+                 attention_memories,
+                 attention_bias=None,
+                 recurrent_initializer=None,
+                 reuse=None,
+                 name=None):
+        super(AttentionIndRNNCell, self).__init__(num_units,
+                                                  recurrent_initializer=recurrent_initializer,
+                                                  reuse=reuse, name=name)
+        with tf.variable_scope(name, "AttentionGRUCell", reuse=reuse):
+            self._attention_keys = dense(attention_memories, num_units, name='attention_key')
+            self._attention_values = dense(attention_memories, num_units, name='attention_value')
+        self._attention_bias = attention_bias
+
+    def attention(self, inputs, state):
+        attention_query = tf.matmul(
+            tf.concat([inputs, state], 1), self._attention_query_kernel)
+        attention_query = tf.nn.bias_add(attention_query, self._attention_query_bias)
+
+        alpha = tf.tanh(attention_query[:, None, :] + self._attention_keys)
+        alpha = dense(alpha, 1, kernel=self._alpha_kernel, name='attention')
+        if self._attention_bias is not None:
+            alpha += self._attention_bias
+        alpha = tf.nn.softmax(alpha, axis=1)
+
+        context = tf.multiply(self._attention_values, alpha)
+        context = tf.reduce_sum(context, axis=1)
+
+        return context
+
+    def build(self, inputs_shape):
+        if inputs_shape[1].value is None:
+            raise ValueError("Expected inputs.shape[-1] to be known, saw shape: %s"
+                             % inputs_shape)
+
+        input_depth = inputs_shape[1].value
+        self._recurrent_kernel = self.add_variable(
+            "recurrent/weights",
+            shape=[self._num_units],
+            initializer=self._recurrent_initializer)
+        epsilon = np.power(2.0, 1.0/50.0)
+        self._recurrent_kernel = tf.clip_by_value(self._recurrent_kernel, -epsilon, epsilon)
+
+        self._input_kernel = self.add_variable(
+            "input/weights",
+            shape=[input_depth + self._num_units, self._num_units],
+            initializer=self._kernel_initializer)
+
+        self._bias = self.add_variable(
+            "bias",
+            shape=[self._num_units],
+            initializer=self._bias_initializer)
+
+        self._attention_query_kernel = self.add_variable(
+            "attention_query/weight",
+            shape=[input_depth + self._num_units, self._num_units],
+            initializer=self._kernel_initializer)
+        self._attention_query_bias = self.add_variable(
+            "attention_query/bias",
+            shape=[self._num_units],
+            initializer=self._bias_initializer)
+        self._alpha_kernel = self.add_variable(
+            'alpha_kernel',
+            shape=[1, self._num_units],
+            initializer=self._kernel_initializer)
+
+        self.built = True
+
+    def call(self, inputs, state):
+        context = self.attention(inputs, state)
+        inputs = tf.concat([inputs, context], axis=1)
+        return super(AttentionIndRNNCell, self).call(inputs, state)
