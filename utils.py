@@ -256,9 +256,9 @@ def expand_feed_dict(feed_dict):
             # Split v along the first dimension.
             n = len(k)
             batch_size = v.shape[0]
+            assert batch_size > 0
             span = batch_size // n
             remainder = batch_size % n
-            assert span > 0
             base = 0
             for i, p in enumerate(k):
                 if i < remainder:
@@ -624,7 +624,7 @@ class AttentionIndRNNCell(IndRNNCell):
         super(AttentionIndRNNCell, self).__init__(num_units,
                                                   recurrent_initializer=recurrent_initializer,
                                                   reuse=reuse, name=name)
-        with tf.variable_scope(name, "AttentionGRUCell", reuse=reuse):
+        with tf.variable_scope(name, "AttentionIndRNNCell", reuse=reuse):
             self._attention_keys = dense(attention_memories, num_units, name='attention_key')
             self._attention_values = dense(attention_memories, num_units, name='attention_value')
         self._attention_bias = attention_bias
@@ -639,6 +639,7 @@ class AttentionIndRNNCell(IndRNNCell):
         if self._attention_bias is not None:
             alpha += self._attention_bias
         alpha = tf.nn.softmax(alpha, axis=1)
+        self._alpha = alpha
 
         context = tf.multiply(self._attention_values, alpha)
         context = tf.reduce_sum(context, axis=1)
@@ -687,3 +688,6 @@ class AttentionIndRNNCell(IndRNNCell):
         context = self.attention(inputs, state)
         inputs = tf.concat([inputs, context], axis=1)
         return super(AttentionIndRNNCell, self).call(inputs, state)
+
+    def get_attention_weights(self):
+        return self._alpha

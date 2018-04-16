@@ -39,8 +39,8 @@ class Evaluator(object):
         frozen_graph_path = os.path.join(config.model_dir, 'frozen_graph.pb')
         # If the file doesn't existed, create it.
         if not os.path.exists(frozen_graph_path):
-            logging.info('The frozen graph does not existed, use \'init_from_config\' instead'
-                         'and create a frozen graph for next use.')
+            logging.warning('The frozen graph does not existed, use \'init_from_config\' instead'
+                            'and create a frozen graph for next use.')
             self.init_from_config(config)
             saver = tf.train.Saver()
             save_dir = '/tmp/graph-{}'.format(os.getpid())
@@ -185,8 +185,10 @@ if __name__ == '__main__':
     # Logger
     logging.basicConfig(level=logging.INFO)
     evaluator = Evaluator()
-    # evaluator.init_from_config(config)
-    evaluator.init_from_frozen_graphdef(config)
+    if config.test.frozen:
+        evaluator.init_from_frozen_graphdef(config)
+    else:
+        evaluator.init_from_config(config)
     for attr in config.test:
         if attr.startswith('set'):
             evaluator.evaluate(config.test.batch_size, **config.test[attr])
