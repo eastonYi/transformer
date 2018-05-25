@@ -6,13 +6,14 @@ src_vocab_size: 9031
 dst_vocab_size: 34218
 hidden_units: 512
 scale_embedding: True
+num_shards: 1
 tie_embedding_and_softmax: True
 attention_dropout_rate: 0.0
 residual_dropout_rate: 0.1
 num_blocks: 6
 num_heads: 8
 ff_activation: 'relu'
-model_dir: 'model-news'
+model_dir: 'model-news6'
 train:
   num_gpus: 8
   src_path: '../../parallel/news180w/zh.char.txt'
@@ -35,7 +36,7 @@ dev:
   batch_size: 256
   src_path: '../../parallel/test/nist02.char.txt'
   ref_path: '../../parallel/test/nist02.ref'
-  output_path: 'model-news/nist02.output'
+  output_path: 'model-news6/nist02.output'
 
 test:
   batch_size: 256
@@ -47,36 +48,20 @@ test:
   set_nist02:
     src_path: '../../parallel/test/nist02.char.txt'
     ref_path: '../../parallel/test/nist02.ref'
-    output_path: 'model-news/nist02.output'
+    output_path: 'model-news6/nist02.output'
   set_nist03:
     src_path: '../../parallel/test/nist03.char.txt'
     ref_path: '../../parallel/test/nist03.ref'
-    output_path: 'model-news/nist03.output'
+    output_path: 'model-news6/nist03.output'
   set_nist04:
     src_path: '../../parallel/test/nist04.char.txt'
     ref_path: '../../parallel/test/nist04.ref'
-    output_path: 'model-news/nist04.output'
+    output_path: 'model-news6/nist04.output'
   set_nist05:
     src_path: '../../parallel/test/nist05.char.txt'
     ref_path: '../../parallel/test/nist05.ref'
-    output_path: 'model-news/nist05.output'
-#  set_iwslt10dev:
-#    src_path: '../../parallel/test/iwslt10dev.char.txt'
-#    ref_path: '../../parallel/test/iwslt10dev.ref'
-#    output_path: 'model-news/iwslt10dev.output'
-#  set_iwslt10:
-#    src_path: '../../parallel/test/iwslt10.char.txt'
-#    ref_path: '../../parallel/test/iwslt10.ref'
-#    output_path: 'model-news/iwslt10.output'
-#  set_iwslt11:
-#    src_path: '../../parallel/test/iwslt11.char.txt'
-#    ref_path: '../../parallel/test/iwslt11.ref'
-#    output_path: 'model-news/iwslt11.output'
-#  set_iwslt12:
-#    src_path: '../../parallel/test/iwslt12.char.txt'
-#    ref_path: '../../parallel/test/iwslt12.ref'
-#    output_path: 'model-news/iwslt12.output'
-#  set_iwslt13:
-#    src_path: '../../parallel/test/iwslt13.char.txt'
-#    ref_path: '../../parallel/test/iwslt13.ref'
-#    output_path: 'model-news/iwslt13.output'
+    output_path: 'model-news6/nist05.output'
+
+#  set_train:
+#    src_path: '../../parallel/news180w/zh.char.txt'
+#    output_path: 'model-news6/train.en'

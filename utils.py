@@ -13,6 +13,7 @@ import tensorflow.contrib.framework as tff
 from tensorflow.python.layers import base as base_layer
 
 from third_party.tensor2tensor import common_layers, common_attention
+common_layers.allow_defun = False
 
 
 class AttrDict(dict):
@@ -111,6 +112,14 @@ class DataReader(object):
                 src_sent = src_sent.split()
                 dst_sent = dst_sent.split()
 
+                # A special data augment method for training PTransformer model.
+                # if self._config.model == 'PTransformer' and self._config.data_augment:
+                #     s = np.random.randint(2-self._config.num_parallel, self._config.num_parallel)
+                #     s = max(0, s)
+                #     s = ['<S>'] * s
+                #     src_sent = s + src_sent
+                #     dst_sent = s + dst_sent
+
                 if len(src_sent) > max_length or len(dst_sent) > max_length:
                     continue
 
@@ -189,6 +198,9 @@ class DataReader(object):
                 yield self.create_batch(src_sents, o='src')
                 src_sents = []
         if src_sents:
+            # We ensure batch size not small than gpu number by padding redundant samples.
+            if len(src_sents) < self._config.test.num_gpus:
+                src_sents.extend([src_sents[-1]] * self._config.test.num_gpus)
             yield self.create_batch(src_sents, o='src')
 
     def get_test_batches_with_target(self, src_path, dst_path, batch_size):
@@ -410,7 +422,8 @@ def multihead_attention(query_antecedent,
                         output_depth,
                         num_heads,
                         dropout_rate,
-                        reserve_last=False,
+                        num_queries=None,
+                        query_eq_key=False,
                         summaries=False,
                         image_shapes=None,
                         name=None):
@@ -425,7 +438,8 @@ def multihead_attention(query_antecedent,
     output_depth: an integer
     num_heads: an integer dividing total_key_depth and total_value_depth
     dropout_rate: a floating point number
-    reserve_last: a boolean
+    num_queries: a int or None
+    query_eq_key: a boolean
     summaries: a boolean
     image_shapes: optional quadruple of integer scalars for image summary.
         If the query positions and memory positions represent the
@@ -441,19 +455,31 @@ def multihead_attention(query_antecedent,
         default_name="multihead_attention",
         values=[query_antecedent, memory_antecedent]):
 
-        if memory_antecedent is None:
-            # self attention
-            combined = dense(query_antecedent, total_key_depth * 2 + total_value_depth, name="qkv_transform")
-            q, k, v = tf.split(
-              combined, [total_key_depth, total_key_depth, total_value_depth],
-              axis=2)
+        if not query_eq_key:
+            if memory_antecedent is None:
+                # Q = K = V
+                # self attention
+                combined = dense(query_antecedent, total_key_depth * 2 + total_value_depth, name="qkv_transform")
+                q, k, v = tf.split(
+                  combined, [total_key_depth, total_key_depth, total_value_depth],
+                  axis=2)
+            else:
+                # Q != K = V
+                q = dense(query_antecedent, total_key_depth, name="q_transform")
+                combined = dense(memory_antecedent, total_key_depth + total_value_depth, name="kv_transform")
+                k, v = tf.split(combined, [total_key_depth, total_value_depth], axis=2)
         else:
-            q = dense(query_antecedent, total_key_depth, name="q_transform")
-            combined = dense(memory_antecedent, total_key_depth + total_value_depth, name="kv_transform")
-            k, v = tf.split(combined, [total_key_depth, total_value_depth], axis=2)
+            # In this setting, we use query_antecedent as the query and key,
+            # and use memory_antecedent as the value.
+            assert memory_antecedent is not None
+            combined = dense(query_antecedent, total_key_depth * 2, name="qk_transform")
+            q, k = tf.split(
+                combined, [total_key_depth, total_key_depth],
+                axis=2)
+            v = dense(memory_antecedent, total_value_depth, name='v_transform')
 
-        if reserve_last:
-            q = q[:, -1:, :]
+        if num_queries:
+            q = q[:, -num_queries:, :]
 
         q = common_attention.split_heads(q, num_heads)
         k = common_attention.split_heads(k, num_heads)

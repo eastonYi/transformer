@@ -4,14 +4,38 @@ import codecs
 import commands
 import os
 import time
+import logging
+import tensorflow as tf
+import numpy as np
 from argparse import ArgumentParser
 from tempfile import mkstemp
 
-import numpy as np
 import yaml
 
-from model import *
+from models import *
 from utils import DataReader, AttrDict, expand_feed_dict
+
+
+def roll_back_to_previous_version(config):
+    with tf.Graph().as_default():
+        with tf.Session() as sess:
+            var_list = tf.contrib.framework.list_variables(config.model_dir)
+            var_names, var_shapes = zip(*var_list)
+            reader = tf.contrib.framework.load_checkpoint(config.model_dir)
+            var_values = [reader.get_tensor(name) for name in var_names]
+            new_var_list = []
+            for name, value in zip(var_names, var_values):
+                if name == 'encoder/src_embedding/kernel':
+                    name = 'src_embedding'
+                elif name == 'decoder/dst_embedding/kernel':
+                    name = 'dst_embedding'
+                elif name == 'decoder/softmax/kernel':
+                    name = 'dst_softmax'
+                new_var_list.append(tf.get_variable(name, initializer=value))
+            sess.run(tf.global_variables_initializer())
+            saver = tf.train.Saver(new_var_list)
+            saver.save(sess, os.path.join(config.model_dir, 'new_version'))
+    config.num_shards = 1
 
 
 class Evaluator(object):
@@ -31,7 +55,11 @@ class Evaluator(object):
         self.sess = tf.Session(config=sess_config)
 
         # Restore model.
-        tf.train.Saver().restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
+        try:
+            tf.train.Saver().restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
+        except tf.errors.NotFoundError:
+            roll_back_to_previous_version(config)
+            tf.train.Saver().restore(self.sess, tf.train.latest_checkpoint(config.model_dir))
 
         self.data_reader = DataReader(config)
 
@@ -50,7 +78,7 @@ class Evaluator(object):
 
             with tf.Session(graph=tf.Graph()) as sess:
                 clear_devices = True
-                output_node_names = ['loss_sum', 'prediction']
+                output_node_names = ['loss_sum', 'predictions']
                 # We import the meta graph in the current default Graph
                 saver = tf.train.import_meta_graph(save_path + '.meta', clear_devices=clear_devices)
 
@@ -101,7 +129,7 @@ class Evaluator(object):
 
             self.model['src_pls'] = collect_placeholders('src_pl')
             self.model['dst_pls'] = collect_placeholders('dst_pl')
-            self.model['prediction'] = graph.get_tensor_by_name('import/prediction:0')
+            self.model['predictions'] = graph.get_tensor_by_name('import/predictions:0')
 
     def init_from_existed(self, model, sess, data_reader):
         self.sess = sess
@@ -109,7 +137,7 @@ class Evaluator(object):
         self.data_reader = data_reader
 
     def beam_search(self, X):
-        return self.sess.run(self.model.prediction, feed_dict=expand_feed_dict({self.model.src_pls: X}))
+        return self.sess.run(self.model.predictions, feed_dict=expand_feed_dict({self.model.src_pls: X}))
 
     def loss(self, X, Y):
         return self.sess.run(self.model.loss_sum, feed_dict=expand_feed_dict({self.model.src_pls: X, self.model.dst_pls: Y}))
@@ -124,6 +152,7 @@ class Evaluator(object):
         start = time.time()
         for X in self.data_reader.get_test_batches(src_path, batch_size):
             Y = self.beam_search(X)
+            Y = Y[:len(X)]
             sents = self.data_reader.indices_to_words(Y)
             assert len(X) == len(sents)
             for sent in sents:
