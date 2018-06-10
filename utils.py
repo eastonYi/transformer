@@ -5,7 +5,6 @@ from __future__ import print_function
 import codecs
 import logging
 import os
-from itertools import izip
 from tempfile import mkstemp
 import numpy as np
 import tensorflow as tf
@@ -81,7 +80,7 @@ class DataReader(object):
             dst_shuf_path = dst_path
 
         src_sents, dst_sents = [], []
-        for src_sent, dst_sent in izip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
+        for src_sent, dst_sent in zip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
             src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
             # If exceed the max length, abandon this sentence pair.
             src_sent = src_sent.split()
@@ -134,7 +133,7 @@ class DataReader(object):
         for bucket in buckets:
             caches[bucket] = [[], [], 0, 0]  # src sentences, dst sentences, src tokens, dst tokens
 
-        for src_sent, dst_sent in izip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
+        for src_sent, dst_sent in zip(open(src_shuf_path, 'r'), open(dst_shuf_path, 'r')):
             src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
 
             src_sent = src_sent.split()
@@ -227,7 +226,7 @@ class DataReader(object):
         """
 
         src_sents, dst_sents = [], []
-        for src_sent, dst_sent in izip(open(src_path, 'r'), open(dst_path, 'r')):
+        for src_sent, dst_sent in zip(open(src_path, 'r'), open(dst_path, 'r')):
             src_sent, dst_sent = src_sent.decode('utf8'), dst_sent.decode('utf8')
             src_sent = src_sent.split()
             dst_sent = dst_sent.split()

@@ -9,7 +9,7 @@ import numpy as np
 import yaml
 import time
 import logging
-import commands
+import subprocess
 from tempfile import mkstemp
 from argparse import ArgumentParser
 
@@ -95,7 +95,7 @@ class Evaluator(object):
         cmd = kargs['cmd'] if 'cmd' in kargs else\
             "perl multi-bleu.perl {ref} < {output} 2>/dev/null | awk '{{print($3)}}' | awk -F, '{{print $1}}'"
         self.translate(src_path, output_path, batch_size)
-        bleu = commands.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
+        bleu = subprocess.getoutput(cmd.format(**{'ref': ref_path, 'output': output_path}))
         logging.info('BLEU: {}'.format(bleu))
         if 'dst_path' in kargs:
             self.ppl(src_path, kargs['dst_path'], batch_size)
