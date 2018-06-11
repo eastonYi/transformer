@@ -14,15 +14,32 @@ class BreakLoopException(Exception):
     pass
 
 
-def train(config):
+def wrap_scope(input_ckpt_path, output_ckpt_path, scope):
+    with tf.Graph().as_default():
+        with tf.Session() as sess:
+            with tf.variable_scope(scope):
+                var_list = tf.contrib.framework.list_variables(input_ckpt_path)
+                var_names, var_shapes = zip(*var_list)
+                reader = tf.contrib.framework.load_checkpoint(input_ckpt_path)
+                var_values = [reader.get_tensor(name) for name in var_names]
+                new_var_list = [tf.get_variable(name, initializer=value)
+                                for name, value in zip(var_names, var_values)]
+                sess.run(tf.global_variables_initializer())
+                saver = tf.train.Saver(new_var_list)
+                saver.save(sess, output_ckpt_path)
+
+
+def train(config, teacher_config):
     """Train a model with a config file."""
     logger = logging.getLogger('')
     data_reader = DataReader(config=config)
     model = eval(config.model)(config=config, num_gpus=config.train.num_gpus)
-    model.build_train_model(test=config.train.eval_on_dev)
+    with tf.variable_scope('teacher'):
+        teacher_model = eval(teacher_config.model)(config=teacher_config, num_gpus=0)
+    model.build_train_model(test=config.train.eval_on_dev, teacher_model=teacher_model)
 
     train_op, loss_op = model.get_train_op(name=None)
-    global_saver = tf.train.Saver()
+    global_saver = tf.train.Saver([v for v in tf.global_variables() if not v.name.startswith('teacher')])
 
     sess_config = tf.ConfigProto()
     sess_config.gpu_options.allow_growth = True
@@ -33,7 +50,19 @@ def train(config):
     with tf.Session(config=sess_config) as sess:
         # Initialize all variables.
         sess.run(tf.global_variables_initializer())
-        # Reload variables from disk.
+
+        # Reload teacher variables from disk.
+        logger.info('Load teacher model parameters...')
+        teacher_vars = tf.global_variables('teacher')
+        teacher_saver = tf.train.Saver(var_list=teacher_vars)
+        tmp_ckpt = '/tmp/teacher-{}.ckpt'.format(os.getpid())
+        wrap_scope(tf.train.latest_checkpoint(teacher_config.model_dir), tmp_ckpt, 'teacher')
+        teacher_saver.restore(sess, tmp_ckpt)
+        for v in teacher_vars:
+            logger.info('Reload {} from disk.'.format(v.name))
+
+        # Reload student variables from disk.
+        logger.info('Load student model parameters...')
         if tf.train.latest_checkpoint(config.model_dir):
             available_vars = available_variables(config.model_dir)
             if available_vars:
@@ -121,9 +150,11 @@ def train(config):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('-c', '--config', dest='config')
+    parser.add_argument('-t', '--teacher_config', dest='teacher_config')
     args = parser.parse_args()
     # Read config
     config = AttrDict(yaml.load(open(args.config)))
+    teacher_config = AttrDict(yaml.load(open(args.teacher_config)))
     # Logger
     if not os.path.exists(config.model_dir):
         os.makedirs(config.model_dir)
@@ -132,4 +163,4 @@ if __name__ == '__main__':
     console.setLevel(logging.INFO)
     logging.getLogger('').addHandler(console)
     # Train
-    train(config)
+    train(config, teacher_config)

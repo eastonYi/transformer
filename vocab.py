@@ -1,14 +1,10 @@
-"""
-June 2017 by kyubyong park. 
-kbpark.linguist@gmail.com.
-Modified by Chunqi Wang in July 2017.
-"""
 import codecs
-import os
-import yaml
 import logging
+import os
 from argparse import ArgumentParser
 from collections import Counter
+
+import yaml
 
 from utils import AttrDict
 

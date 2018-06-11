@@ -1,0 +1,52 @@
+---
+model: 'Transformer'
+src_vocab:
+dst_vocab:
+src_vocab_size:
+dst_vocab_size:
+hidden_units: 512
+scale_embedding: True
+tie_embedding_and_softmax: True
+tie_embeddings: False
+attention_dropout_rate: 0.0
+residual_dropout_rate: 0.1
+num_blocks: 6
+num_heads: 8
+ff_activation: 'relu'
+model_dir:
+train:
+    num_gpus: 8
+    src_path:
+    dst_path:
+    tokens_per_batch: 30000
+    max_length: 125
+    num_epochs: 100
+    num_steps: 300000
+    save_freq: 1000
+    show_freq: 1
+    summary_freq: 100
+    grads_clip: 0
+    optimizer: 'adam_decay'
+    learning_rate: 1
+    warmup_steps: 4000
+    label_smoothing: 0.1
+    toleration: 10
+    eval_on_dev: False
+dev:
+    batch_size: 256
+    src_path:
+    ref_path:
+    output_path:
+
+test:
+    batch_size: 256
+    max_target_length: 200
+    lp_alpha: 0.6
+    beam_size: 4
+    num_gpus: 8
+
+    set1:
+        src_path:
+        ref_path:
+        output_path:
+        cmd:
