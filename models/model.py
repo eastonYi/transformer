@@ -417,6 +417,7 @@ class Model(object):
 
             # Call decoder and get predictions.
             decoder_output, cache = self.decoder_with_caching(preds, cache, encoder_output, is_training=False, reuse=reuse)
+
             _, next_preds, next_scores = self.test_output(decoder_output, reuse=reuse)
             next_preds = next_preds[:, None, 0]
             next_scores = next_scores[:, 0]

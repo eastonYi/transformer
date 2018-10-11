@@ -1,4 +1,5 @@
 from tensorflow.python.ops.rnn_cell import GRUCell
+import tensorflow as tf
 
 from model import Model
 from utils import *
@@ -138,6 +139,9 @@ class Transformer(Model):
         return decoder_output
 
     def decoder_with_caching_impl(self, decoder_input, decoder_cache, encoder_output, is_training):
+        """
+        used for infering. and the decoder_input length is changing so no need the triangle masking
+        """
 
         attention_dropout_rate = self._config.attention_dropout_rate if is_training else 0.0
         residual_dropout_rate = self._config.residual_dropout_rate if is_training else 0.0
@@ -159,7 +163,6 @@ class Transformer(Model):
         decoder_output = tf.layers.dropout(decoder_output,
                                            rate=residual_dropout_rate,
                                            training=is_training)
-
         new_cache = []
 
         # Blocks
