@@ -177,7 +177,7 @@ class Model(object):
                     # Avoid errors caused by empty input by a condition phrase.
                     enc_output = self.encoder(X, is_training=False, reuse=i > 0 or None)
                     preds = self.beam_search(enc_output, use_cache=self._use_cache, reuse=i > 0 or None)
-                    dec_output = self.decoder(dec_input, enc_output, is_training=False, reuse=True)
+                    dec_output = self.decoder(_, preds, scores, cache, logits, enc_output, is_training=False, reuse=True)
                     loss, _ = self.test_loss(dec_output, Y, reuse=True)
 
                     loss_sum += loss
@@ -272,8 +272,7 @@ class Model(object):
 
         def get_bias_scores(scores, bias):
             """
-            If a sequence is finished, we only allow one alive branch. This function aims to give one branch a zero score
-            and the rest -inf score.
+            If a sequence is finished, we only allow one alive branch. This function aims to give one branch a zero score and the rest -inf score.
             Args:
                 scores: A real value array with shape [batch_size * beam_size, beam_size].
                 bias: A bool array with shape [batch_size * beam_size].
@@ -294,7 +293,7 @@ class Model(object):
                 bias: A bool array with shape [batch_size * beam_size].
 
             Returns:
-                A int array with shape [batch_size * beam_size].
+                A int array with shape [batch_size * beam_size, beam_size].
             """
             bias = tf.to_int32(bias)
             return preds * (1 - bias[:, None]) + bias[:, None] * 3
@@ -320,7 +319,6 @@ class Model(object):
         def step(i, bias, preds, scores, lengths, cache):
             # Where are we.
             i += 1
-
             # Call decoder and get predictions.
             if use_cache:
                 decoder_output, cache = \

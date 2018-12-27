@@ -64,7 +64,7 @@ class Evaluator(object):
         self.data_reader = DataReader(config)
 
     def init_from_frozen_graphdef(self, config):
-        frozen_graph_path = os.path.join(config.model_dir, 'frozen_graph.pb')
+        frozen_graph_path = os.path.join(config.model_dir, 'freeze_graph_test.py')
         # If the file doesn't existed, create it.
         if not os.path.exists(frozen_graph_path):
             logging.warning('The frozen graph does not existed, use \'init_from_config\' instead'
