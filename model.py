@@ -222,7 +222,7 @@ class Model(object):
                 bias: A bool array with shape [batch_size * beam_size].
 
             Returns:
-                A int array with shape [batch_size * beam_size].
+                A int array with shape [batch_size * beam_size, beam_size].
             """
             bias = tf.to_int32(bias)
             return preds * (1 - bias[:, None]) + bias[:, None] * 3
